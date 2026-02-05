@@ -1,0 +1,24 @@
+# Environments
+.env
+*.env
+venv/
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+
+# Next.js
+.next/
+out/
+
+# Firebase
+.firebase/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
