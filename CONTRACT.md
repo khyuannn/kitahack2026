@@ -45,7 +45,7 @@ Response:
 ### POST /api/cases/{caseId}/evidence
 Request:
 {
-    "type": "text" | "image" | "pdf" | "audio",
+    "fileType": "text" | "image" | "pdf" | "audio",
     "storageUrl": string,
     "text"?: string
 }
