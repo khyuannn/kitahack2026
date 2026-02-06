@@ -102,12 +102,6 @@ Example:
   "settlement": SettlementJSON | null
 }
 
-Rules:
-- case_id must always be returned
-- status must be "done" or "running"
-- settlement.recommended_amount must always exist
-- settlement.reason must always exist
-
 ## Non-Goals (Not Part of Contract)
 
 The following are NOT guaranteed and may change:
