@@ -1,0 +1,55 @@
+{
+  "api": {
+    "StartCase": {
+      "request": {
+        "title": "string",
+        "caseType": "tenancy_deposit"
+      },
+      "response": {
+        "caseId": "string"
+      }
+    },
+
+    "AddEvidence": {
+      "request": {
+        "fileType": "text | image | pdf | audio",
+        "storageUrl": "string",
+        "text": "string (optional)"
+      },
+      "response": {
+        "evidenceId": "string"
+      }
+    },
+
+    "RunCase": {
+      "request": {
+        "mode": "mvp | full"
+      },
+      "response": {
+        "status": "running"
+      }
+    },
+
+    "GetCaseResult": {
+      "response": {
+        "status": "running | done",
+        "settlement": "Settlement | null"
+      }
+    }
+  },
+
+  "types": {
+    "Settlement": {
+      "summary": "string",
+      "recommended_settlement_rm": "number",
+      "confidence": "number (0–1)",
+      "citations": [
+        {
+          "law": "string",
+          "section": "string",
+          "excerpt": "string"
+        }
+      ]
+    }
+  }
+}
