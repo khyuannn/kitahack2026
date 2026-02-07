@@ -39,7 +39,7 @@ def _init_firebase() -> None:
     if firebase_admin._apps:
         return
 
-    service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT", "").strip()
+    service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT", "backend/serviceAccountKey.json").strip()
     # google_app_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 
     if service_account_path and os.path.isfile(service_account_path):
@@ -48,7 +48,12 @@ def _init_firebase() -> None:
         print("Firebase initialized with service account.")
     else:
         print("Firebase credentials not found or invalid. running in mock mode.")
-        
+
+# debug purpose
+print(f"debug: current dir: {os.getcwd()}")
+path = os.getenv("FIREBASE_SERVICE_ACCOUNT") 
+print(f"debug: path from env: {path}")
+print(f"debug: file exists? {os.path.isfile(path) if path else 'N/A'}")       
 # -----------------------------------------------------------------------------
 # App setup
 # -----------------------------------------------------------------------------
