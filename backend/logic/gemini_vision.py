@@ -1,19 +1,42 @@
-import google.generativeai as genai
+import google.genai as genai
+from google.genai import types
 
-# M1 Role: Defining how the AI 'sees' legal evidence
-def analyze_legal_evidence(file_path):
-    model = genai.GenerativeModel('gemini-1.5-pro')
+def extract_evidence_facts(file_path):
+    client = genai.Client(api_key="YOUR_API_KEY")
     
-    # This prompt turns an image into "Legal Facts"
+    # M1 Logic: The "Vision Prompt"
+    # We ask for JSON so M3 (Backend) can save it easily to Firestore.
     prompt = """
-    You are a Legal Evidence Analyzer. Look at this image/PDF and:
-    1. Determine if it is a Receipt, Contract, or Photo of Damage.
-    2. Extract the 'Hard Facts': Dates, RM Amounts, Names.
-    3. Evaluate Credibility: Is the document clear or blurry?
+    Analyze this Malaysian legal document/evidence photo. 
+    1. Identify the Document Type (Tenancy Agreement, Receipt, NRIC, WhatsApp).
+    2. Extract Key Facts:
+       - Amounts (RM)
+       - Dates (DD/MM/YYYY)
+       - Parties involved (Names)
+    3. If this is a photo of damage, describe the severity neutrally.
+    
     Return ONLY a JSON object:
-    {"type": "...", "facts": {"amount": 0, "date": "..."}, "summary": "..."}
+    {
+      "doc_type": "string",
+      "facts": {
+        "total_amount_rm": number,
+        "date": "string",
+        "involved_parties": ["name1", "name2"]
+      },
+      "description": "2-sentence summary of the evidence"
+    }
     """
     
-    # Logic to process the file (M3 will call this function)
-    response = model.generate_content([prompt, file_path])
-    return response.text
+    # Load the image/PDF
+    with open(file_path, "rb") as f:
+        image_data = f.read()
+        
+    response = client.models.generate_content(
+        model="gemini-1.5-pro", # Use Pro for complex legal docs
+        contents=[
+            types.Part.from_bytes(data=image_data, mime_type="image/jpeg"), 
+            prompt
+        ]
+    )
+    
+    return json.loads(response.text)
