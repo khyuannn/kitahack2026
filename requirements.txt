@@ -1,4 +1,7 @@
 python-dotenv
+fastapi
+uvicorn[standard]
+firebase-admin
 langchain-community
 langchain-google-genai
 langchain-pinecone
