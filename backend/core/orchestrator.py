@@ -16,19 +16,24 @@ from backend.prompts.plaintiff import PLAINTIFF_SYS_PROMPT
 from backend.prompts.defendant import DEFENDANT_SYS_PROMPT
 from backend.prompts.mediator import MEDIATOR_SYS_PROMPT  # For Phase 2
 
+
+# Import agent graph (Phase 1.5)
+try:
+    from backend.graph.agent_graph import run_negotiation_with_rag
+    GRAPH_AVAILABLE = True
+except ImportError:
+    GRAPH_AVAILABLE = False
+
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Use Gemini model as specified in the plan
-# model = genai.GenerativeModel("gemini-2.0-flash-exp")
-model = "gemini-2.5-flash"
+model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
 
 
 def get_db():
     """Get Firestore client."""
     return firestore.client()
 
-
+# phase 1: basic dumb loop (no RAG)
 def run_dumb_loop(case_id: str, mode: str = "mvp") -> None:
     """
     Phase 1: Basic 2-turn conversation loop.
@@ -154,7 +159,22 @@ Respond to their argument."""
             "createdAt": firestore.SERVER_TIMESTAMP
         })
 
-
+# phase 1.5+: RAG-enabled negotiation
+def run_case(case_id: str, mode: str = "mvp") -> None:
+    """
+    Smart routing function:
+    - If mode="mvp" → Use simple dumb loop (Phase 1)
+    - If mode="full" → Use agent graph with RAG (Phase 1.5)
+    
+    This allows gradual migration to Phase 2.
+    """
+    if mode == "full" and GRAPH_AVAILABLE:
+        print(f"[Orchestrator] Running FULL mode with RAG for case {case_id}")
+        run_negotiation_with_rag(case_id, mode)
+    else:
+        print(f"[Orchestrator] Running MVP mode (simple loop) for case {case_id}")
+        run_dumb_loop(case_id, mode)
+        
 # =============================================================================
 # Optional: Helper function for getting case results
 # =============================================================================

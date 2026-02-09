@@ -14,7 +14,7 @@ from firebase_admin import credentials, firestore
 import uuid
 from typing import Optional
 from backend.core import orchestrator
-from backend.core.orchestrator import run_dumb_loop, get_case_result
+from backend.core.orchestrator import run_dumb_loop, get_case_result, run_case
 import threading
 
 from backend.app.api_models import (
@@ -185,6 +185,7 @@ async def run_case(
     TODO: Call orchestrator.run_case() or equivalent.
     """
     # TODO: orchestrator.run_case(case_id=case_id, mode=request.mode)/ orchestrator.run_dumb_loop(caseId) 
+    
     if db:
         case_ref = db.collection("cases").document(caseId)
         case_doc = case_ref.get()
@@ -199,7 +200,7 @@ async def run_case(
                 status_code=400,
                 detail=f"Case with ID {caseId} is already running.",
             )
-    thread = threading.Thread(target=run_dumb_loop, args=(caseId, request.mode))
+    thread = threading.Thread(target=run_case, args=(caseId, request.mode)) #changed from run_dumb_loop (phase1) to run_case (phase 1.5)
     thread.daemon = True
     thread.start()
     return RunCaseResponse(status="running")
