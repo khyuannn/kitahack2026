@@ -8,3 +8,4 @@ langchain-pinecone
 langchain-core
 pinecone-client
 pypdf
+langgraphy
