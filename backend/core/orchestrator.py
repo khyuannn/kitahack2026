@@ -4,6 +4,7 @@ Implements basic 2-turn negotiation: Plaintiff -> Defendant -> End
 No LangGraph yet - just a simple Python loop.
 """
 import os
+import time
 from typing import Optional
 from firebase_admin import firestore
 from google import genai
@@ -15,6 +16,7 @@ from google.genai import types
 from backend.prompts.plaintiff import PLAINTIFF_SYS_PROMPT
 from backend.prompts.defendant import DEFENDANT_SYS_PROMPT
 from backend.prompts.mediator import MEDIATOR_SYS_PROMPT  # For Phase 2
+from backend.rag.retrieval import retrieve_law
 
 
 # Import agent graph (Phase 1.5)
@@ -26,7 +28,27 @@ except ImportError:
 
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+
+def call_gemini_with_retry(prompt: str, max_retries: int = 3) -> str:
+    """Call Gemini API with retry + exponential backoff for rate limits."""
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                wait_time = (2 ** attempt) * 10  # 10s, 20s, 40s
+                print(f"⏳ Rate limited (attempt {attempt+1}/{max_retries}). Waiting {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise e
+    raise Exception(f"Gemini API failed after {max_retries} retries (rate limited).")
 
 
 def get_db():
@@ -82,18 +104,27 @@ def run_dumb_loop(case_id: str, mode: str = "mvp") -> None:
         # =====================================================================
         print(f"[Orchestrator] Case {case_id}: Plaintiff speaking...")
         
-        plaintiff_prompt = f"""{PLAINTIFF_SYS_PROMPT}
+        # Search for relevant laws using the case title
+        print(f"🔎 Retrieving laws for: {case_title}")
+        legal_docs = retrieve_law(case_title) 
+        legal_context_str = "\n".join([f"- {d['law']} s.{d['section']}: {d['excerpt']}" for d in legal_docs])
+
+        # Inject legal_context_str into the prompt format
+        # Use replace() instead of format() to avoid issues with JSON braces {} in the prompt
+        system_instruction = PLAINTIFF_SYS_PROMPT.replace(
+            "{legal_context}", legal_context_str
+        ).replace(
+            "{evidence_facts}", evidence_context
+        )
+
+        plaintiff_prompt = f"""{system_instruction}
 
 Case Title: {case_title}
 Available Evidence: {evidence_context}
 
 Make your opening argument."""
 
-        plaintiff_response = client.models.generate_content(
-            model=model,
-            contents=plaintiff_prompt
-        )
-        plaintiff_text = plaintiff_response.text
+        plaintiff_text = call_gemini_with_retry(plaintiff_prompt)
         
         # Write to Firestore (M4's UI will show this immediately via onSnapshot)
         messages_ref.add({
@@ -120,11 +151,7 @@ The landlord argued:
 
 Respond to their argument."""
 
-        defendant_response = client.models.generate_content(
-            model=model,
-            contents=defendant_prompt
-        )
-        defendant_text = defendant_response.text
+        defendant_text = call_gemini_with_retry(defendant_prompt)
         
         # Write to Firestore
         messages_ref.add({
