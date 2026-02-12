@@ -8,5 +8,6 @@ langchain-pinecone
 langchain-core
 pinecone-client
 pypdf
+langgraph
 pydantic==2.10.3
 google-genai==0.1.0
