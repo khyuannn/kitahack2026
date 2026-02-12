@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy } from "firebase/firestore";
 import { db } from "@/firebase/config";
 
 export interface CaseMessage {
@@ -17,11 +17,13 @@ export function useCaseMessages(caseId: string) {
   useEffect(() => {
     if (!caseId) return;
 
-    const fetchMessages = async () => {
-      const snapshot = await getDocs(
-        collection(db, "cases", caseId, "messages")
-      );
+    // Use onSnapshot for real-time updates
+    const q = query(
+      collection(db, "cases", caseId, "messages"),
+      orderBy("createdAt", "asc")
+    );
 
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
@@ -29,9 +31,9 @@ export function useCaseMessages(caseId: string) {
 
       setMessages(data);
       setLoading(false);
-    };
+    });
 
-    fetchMessages();
+    return () => unsubscribe();
   }, [caseId]);
 
   return { messages, loading };

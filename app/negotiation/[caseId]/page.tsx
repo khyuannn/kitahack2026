@@ -1,9 +1,11 @@
 "use client";
 
 import { useCaseMessages } from "@/hooks/useCaseMessages";
+import { useParams } from "next/navigation";
 import { Key, ReactElement, JSXElementConstructor, ReactNode, ReactPortal } from "react";
 export default function NegotiationPage() {
-  const caseId = "abc123";
+  const params = useParams();
+  const caseId = params.caseId as string;
   // Destructure for better control if your hook supports it
   const { messages, loading } = useCaseMessages(caseId);
 

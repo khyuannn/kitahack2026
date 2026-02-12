@@ -18,11 +18,18 @@ def get_retriever():
     """
     Initializes the Vector Store and returns a retriever object.
     """
+    # 1. Force the Environment Variable for LangChain
+    if not os.environ.get("GOOGLE_API_KEY"):
+        os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+        
     if not PINECONE_API_KEY or not GOOGLE_API_KEY:
         raise ValueError("Missing API Keys")
 
-    # Initialize Embeddings
-    embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
+    # 2. Initialize Embeddings with explicit API key
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        google_api_key=GOOGLE_API_KEY # 👈 This fixes the "Default Credentials" error
+    )
 
     # Connect to existing index
     vectorstore = PineconeVectorStore(
