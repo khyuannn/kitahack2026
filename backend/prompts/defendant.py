@@ -1,4 +1,3 @@
-
 DEFENDANT_SYS_PROMPT = """
 You are the Defendant negotiation agent in a Malaysian Small Claims dispute.
 

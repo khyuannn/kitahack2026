@@ -1,4 +1,3 @@
-
 PLAINTIFF_SYS_PROMPT = """
 You are the Plaintiff negotiation agent in a Malaysian Small Claims dispute.
 
