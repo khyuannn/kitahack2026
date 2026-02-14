@@ -1,6 +1,5 @@
-from pydantic import BaseModel
-from typing import Literal, Optional
-
+from pydantic import BaseModel, Field
+from typing import Literal, Optional, List
 class StartCaseRequest(BaseModel):
     title: str
     caseType: Literal["tenancy_deposit"]
@@ -26,9 +25,253 @@ class GetCaseResultResponse(BaseModel):
     status: Literal["running", "done"]
     settlement: Optional[dict] = None
 
-#  add at phase2
-# class Settlement(BaseModel):
-#     summary: str
-#     recommended_settlement_rm: float
-#     confidence: float
 
+class Citation(BaseModel):
+    """Legal citation model for settlement references."""
+    law: str = Field(..., example="Contracts Act 1950")
+    section: str = Field(..., example="75")
+    excerpt: str = Field(..., description="Relevant excerpt from the law")
+
+
+class Settlement(BaseModel):
+    summary: str = Field(..., description="Summary of the settlement agreement")
+    recommended_settlement_rm: float = Field(..., description="Recommended settlement amount in RM")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score of the settlement (0-1)")
+    citations: List[Citation] = Field(
+        default=[],
+        description="Legal citations supporting the settlement"
+    )
+    # NEW Phase 2: Negotiation metadata
+    final_round: Optional[int] = Field(
+        default=None,
+        description="Round number where settlement was reached"
+    )
+    
+    plaintiff_final_offer: Optional[int] = Field(
+        default=None,
+        description="Plaintiff's final offer in RM"
+    )
+    
+    defendant_final_offer: Optional[int] = Field(
+        default=None,
+        description="Defendant's final offer in RM"
+    )
+# --------------------------------------------------------
+#phase 2 - turn-based negotiation
+# --------------------------------------------------------
+class TurnRequest(BaseModel):
+    """
+    Request model for /next-turn endpoint.
+    Handles user input and evidence injection during negotiation.
+    """
+    caseId: str = Field(..., description="case ID from phase1.")
+    user_message: str = Field(..., description="User's message for this turn.")
+    current_round: int = Field(..., description="Current round number.")
+    evidence_uris: Optional[list[str]] = Field(default=[], description="Array of Gemini File API URIs for newly uploaded evidence.")
+    # user's floor price (hidden from opponent, used for negotiation strategy)
+    floor_price: Optional[float] = Field(default=None, description="User's minimum acceptable settlement amount in RM")
+
+class TurnResponse(BaseModel):
+    """
+    Response model for /next-turn endpoint.
+    Contains AI response, audio, auditor feedback, and strategic chips.
+    """
+    agent_message: str = Field(..., description="AI opponent's message.")
+    #audio playback
+    audio_uri: Optional[str] = Field(default=None, description="firebase strorage URI for TTS audio of agent_message.")
+    #auditor feedback (M2's validation)
+    auditor_warning: Optional[str] = Field(default=None, description="warning message if auditor detects citation issues")
+    auditor_passed: bool = Field(default=True, description="whether the passed the auditor check")
+    
+    #strategic chips (connect with M1)
+    chips: Optional[dict] = Field(
+        default=None, 
+        description="commander's console chip options for user", 
+        examples={
+            "question": "The landlord claims damages...",
+            "options": [
+                {"label": "Demand proof"},
+                {"label": "Cite Wear & Tear"},
+                {"label": "Offer Split"}
+                ]
+            }
+        )
+game_state:str = Field(..., description="current negaotiation state: 'active', 'settled', 'failed'",
+                       example="active")
+#NEW: Evidence Validation (M2's Gemini Vision)
+# -----------------------------------------------------------------------------
+class ValidateEvidenceRequest(BaseModel):
+    """
+    Request model for /validate-evidence endpoint.
+    Uploads and validates evidence using Gemini Vision.
+    """
+    image_url: str = Field(..., description="Firebase Storage URL of uploaded file")
+    user_claim: str = Field(
+        ...,
+        description="User's claim about what the evidence shows",
+        example="This photo shows damage to the wall"
+    )
+    mime_type: str = Field(
+        ...,
+        description="MIME type of the file",
+        example="image/jpeg"
+    )
+
+class ValidateEvidenceResponse(BaseModel):
+    """
+    Response model for /validate-evidence endpoint.
+    Returns validation results and Gemini File API URI.
+    """
+    is_relevant: bool = Field(..., description="Whether the evidence is valid and relevant")
+    summary_for_agent: Optional[str] = Field(
+        ...,
+        description="M2's Gemini Vision summary to inject into M1's prompts",
+        example="The image is blurry and does not clearly show the claimed damage."
+    )
+    confidence_score: Optional[float] = Field(
+        ...,
+        ge = 0.0,
+        le = 1.0,
+        description="Confidence score of validation (0.0 to 1.0)"
+    )
+    file_uri: Optional[str] = Field(
+        default=None,
+        description="Gemini File API URI of the validated evidence",
+        example="gemini://file/abc123"
+    )
+# auditor response (M2's citation validator)
+# -----------------------------------------------------------------------------
+class AuditorResponse(BaseModel):
+    """
+    Internal model for auditor validation result.
+    Used by M2's auditor.py module.
+    """
+    passed: bool = Field(..., description="Whether the response passed validation")
+    
+    warning_message: Optional[str] = Field(
+        default=None,
+        description="Warning if validation failed",
+        example="Citation Mismatch: Section 15 refers to 'implied condition', not 'refunds'."
+    )
+    
+    # NEW Phase 2: Retry suggestion
+    retry_count: int = Field(
+        default=0,
+        description="Number of times this response has been retried"
+    )
+
+# -----------------------------------------------------------------------------
+# NEW: Strategic Chips (M1's Commander Console)
+# -----------------------------------------------------------------------------
+class ChipOption(BaseModel):
+    """Single chip option for user selection."""
+    label: str = Field(..., description="Display text for the chip button")
+    value: Optional[str] = Field(
+        default=None,
+        description="Internal value (defaults to label if not provided)"
+    )
+
+class ChipOptions(BaseModel):
+    """
+    Model for strategic chip suggestions.
+    Generated by M1's chips.py module.
+    """
+    question: str = Field(
+        ...,
+        description="Context question for the chips",
+        example="The landlord claims damages worth RM500. How do you respond?"
+    )
+    
+    options: List[ChipOption] = Field(
+        ...,
+        min_items=2,
+        max_items=4,
+        description="2-4 strategic options for user"
+    )
+
+# court Filing Export (Sad Path)
+# -----------------------------------------------------------------------------
+class CourtFilingRequest(BaseModel):
+    """
+    Request model for /export-pdf endpoint.
+    Generates Form 198 (Small Claims Court) JSON.
+    """
+    caseId: str = Field(..., description="The case ID")
+
+
+class CourtFilingResponse(BaseModel):
+    """
+    Response model for /export-pdf endpoint.
+    Returns structured JSON for frontend to render as printable HTML.
+    """
+    plaintiff_details: str = Field(
+        ...,
+        description="Plaintiff information",
+        example="Name: John Doe, ID: 123456-78-9012"
+    )
+    
+    defendant_details: str = Field(
+        ...,
+        description="Defendant information",
+        example="Name: ABC Property Management, Reg No: 202301234567"
+    )
+    
+    statement_of_claim: str = Field(
+        ...,
+        description="Formal statement of claim text"
+    )
+    
+    amount_claimed: str = Field(
+        ...,
+        description="Amount being claimed",
+        example="RM 2,500"
+    )
+    
+    facts_list: List[str] = Field(
+        ...,
+        description="List of facts supporting the claim"
+    )
+    
+    # NEW Phase 2: Negotiation summary
+    negotiation_summary: Optional[str] = Field(
+        default=None,
+        description="Summary of failed negotiation attempts"
+    )
+
+# Game State Tracking (Internal Use)
+# =============================================================================
+class GameState(BaseModel):
+    """
+    Internal model for tracking negotiation state.
+    Used by M3's orchestrator.py.
+    """
+    status: Literal["active", "settled", "deadlock", "pending_decision"] = Field(
+        ...,
+        description="Current game status"
+    )
+    
+    current_round: int = Field(..., ge=1, le=5, description="Current round (1-4.5)")
+    
+    plaintiff_offer: Optional[int] = Field(default=None)
+    defendant_offer: Optional[int] = Field(default=None)
+    
+    floor_price_met: bool = Field(
+        default=False,
+        description="Whether defendant offer meets user's floor price"
+    )
+    
+    auditor_retry_count: int = Field(
+        default=0,
+        description="Number of auditor retries for current turn"
+    )
+
+
+# =============================================================================
+# Helper Models
+# =============================================================================
+
+class ErrorResponse(BaseModel):
+    """Standard error response model."""
+    error: str = Field(..., description="Error message")
+    detail: Optional[str] = Field(default=None, description="Additional error details")
+    code: Optional[str] = Field(default=None, description="Error code")
