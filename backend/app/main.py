@@ -35,6 +35,7 @@ from backend.app.api_models import (
     StartCaseResponse,
     TurnRequest,  #phase2
     TurnResponse,
+    ValidateEvidenceRequest,
     ValidateEvidenceResponse,
     ChipOptions,
     CourtFilingRequest,
