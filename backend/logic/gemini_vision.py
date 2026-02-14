@@ -1,3 +1,5 @@
+import os
+import json
 import google.genai as genai
 from google.genai import types
 
@@ -31,8 +33,10 @@ def extract_evidence_facts(file_path):
     with open(file_path, "rb") as f:
         image_data = f.read()
         
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
+
     response = client.models.generate_content(
-        model="gemini-1.5-pro", # Use Pro for complex legal docs
+      model=model_name,
         contents=[
             types.Part.from_bytes(data=image_data, mime_type="image/jpeg"), 
             prompt
