@@ -19,8 +19,8 @@ if GEMINI_API_KEY:
 
 # Standard embedding model
 EMBEDDING_MODEL = "models/gemini-embedding-001" 
-# Use the stable preview model for reasoning
-GENERATION_MODEL = "gemini-2.5-flash-preview-09-2025"
+# Use env-configurable generation model for reasoning
+GENERATION_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
 
 def call_gemini_with_backoff(prompt: str) -> str:
     """
