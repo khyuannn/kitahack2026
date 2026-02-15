@@ -28,7 +28,7 @@ except ImportError:
 
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+model = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
 
 
 def call_gemini_with_retry(prompt: str, max_retries: int = 3) -> str:
