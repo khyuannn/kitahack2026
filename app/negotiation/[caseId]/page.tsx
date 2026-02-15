@@ -1,146 +1,146 @@
 "use client";
 
-import { useCaseMessages, CaseMessage } from "@/hooks/useCaseMessages";
-import { useState, useEffect, useDebugValue } from "react";
-import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { db } from "@/firebase/config";
-import SettlementMeter from "@/components/settlementMeter"; // adjust path if needed
-import { useParams, useSearchParams } from "next/navigation";
-import { getDoc } from "firebase/firestore";
-import StrategyConsole from "@/components/StrategyConsole";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection } from "firebase/firestore";
+import SettlementMeter from "@/components/settlementMeter";
 
+export default function HomePage() {
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+  const [role, setRole] = useState("plaintiff");
+  const [evidenceSummary, setEvidenceSummary] = useState("");
+  const [opponent, setOpponent] = useState("");
+  const [caseId, setCaseId] = useState("");
+  const [negotiationId, setNegotiationId] = useState("");
+  const [negotiationData, setNegotiationData] = useState({});
+  const [negotiationMessages, setNegotiationMessages] = useState([]);
+  const [negotiationLoading, setNegotiationLoading] = useState(false);
+  const [negotiationError, setNegotiationError] = useState("");
+  const [negotiationHistory, setNegotiationHistory] = useState([]);
+  const [negotiationHistoryLoading, setNegotiationHistoryLoading] = useState(false);
+  const [negotiationHistoryError, setNegotiationHistoryError] = useState("");
+  const [negotiationHistoryData, setNegotiationHistoryData] = useState({});
+  const [negotiationHistoryMessages, setNegotiationHistoryMessages] = useState([]);
+  const [floorPrice, setFloorPrice] = useState("");
+  const [facts, setFacts] = useState("");
+  const [amount, setAmount] = useState("");
+  const [initialEvidence, setInitialEvidence] = useState<File | null>(null);
+  const [initialEvidenceSummary, setInitialEvidenceSummary] = useState("");
+  const [initialEvidenceLoading, setInitialEvidenceLoading] = useState(false);
+  const [initialEvidenceError, setInitialEvidenceError] = useState("");
 
+  const handleEvidenceUpload = async (file: File) => {
+    setLoading(true);
 
-export default function NegotiationPage() {
-  const params = useParams();
-  const caseId = params.caseId as string;
-  const searchParams = useSearchParams();
-  const token = searchParams.get("token");
-  const { messages, loading } = useCaseMessages(caseId);
-  const [meter, setMeter] = useState(0);
-  const [currentTurn, setCurrentTurn] = useState<string | null>(null);
-  const userRole = token ? "defendant" : "plaintiff";
-  const isMyTurn = currentTurn?.toLowerCase() === userRole.toLowerCase();
-  const [newMessage, setNewMessage] = useState("");
+    const formData = new FormData();
+    formData.append("file", file);
 
-  const handleSend = async (message: string) => {
-  if (!caseId) return;
-
-  try {
-    // 1️⃣ Add message
-    await addDoc(collection(db, "cases", caseId, "messages"), {
-      content: message,
-      role: userRole,
-      createdAt: serverTimestamp(),
+    const res = await fetch("/api/validate-evidence", {
+      method: "POST",
+      body: formData,
     });
 
-    // 2️⃣ Switch turn
-    const nextTurn =
-      userRole === "plaintiff" ? "defendant" : "plaintiff";
+    const data = await res.json();
+    setLoading(false);
 
-    await updateDoc(doc(db, "cases", caseId), {
-      "game_state.current_turn": nextTurn,
+    return data.summary;
+  };
+
+  const handleSubmit = async () => {
+    setLoading(true);
+
+    let evidenceSummary = "";
+
+    if (initialEvidence) {
+      evidenceSummary = await handleEvidenceUpload(initialEvidence);
+      setInitialEvidenceSummary(evidenceSummary);
+    }
+
+    await addDoc(collection(db, "cases"), {
+      role,
+      opponent,
+      facts,
+      dispute_amount: Number(amount),
+      case_variables: {
+        floor_price: Number(floorPrice),
+        evidence_summary: evidenceSummary,
+        settlement_meter: 0.5,
+      },
+      status: "active",
+      created_at: new Date(),
     });
 
-  } catch (error) {
-    console.error("Error sending message:", error);
-  }
-};
+    setLoading(false);
 
-  useEffect(() => {
-    if (!caseId) return; // safety check
+  };
 
-    const unsub = onSnapshot(doc(db, "cases", caseId), (docSnap) => {
-      const data = docSnap.data();
-      setCurrentTurn(data?.game_state?.current_turn ?? null);
-      setMeter(data?.game_state?.settlement_meter ?? 0);
-    });
+  return (
+    <div className="bg-background-light dark:bg-background-dark text-primary dark:text-white transition-colors duration-300 min-h-screen">
+      <div className="h-12 w-full"></div>
+      <div className="flex flex-col min-h-[calc(100vh-3rem)] px-8 max-w-md mx-auto">
 
-    return () => unsub(); // cleanup on unmount
-  }, [caseId]);
+        {/* Header */}
+        <header className="flex items-center gap-4 py-6">
+          <div className="bg-primary dark:bg-white p-2.5 rounded-lg flex items-center justify-center">
+            <span className="material-icons text-white dark:text-black text-2xl">balance</span>
+          </div>
+          <h1 className="font-display text-2xl font-bold tracking-tight">Lex-Machina</h1>
+        </header>
 
+        {/* Main */}
+        <main className="flex-grow flex flex-col items-center justify-center text-center space-y-16 py-12">
+          <h2 className="font-display text-[2.75rem] leading-[1.1] font-black uppercase tracking-tight text-balance">
+            Welcome To<br />Lex-Machina
+          </h2>
+          <input
+            type="number"
+            placeholder="Floor Price (Hidden Limit)"
+            value={floorPrice}
+            onChange={(e) => setFloorPrice(e.target.value)}
+            className="border p-2 rounded w-full"
+          />
+          <input
+            type="file"
+            accept=".pdf,.docx,.txt"
+            onChange={(e) => setInitialEvidence(e.target.files?.[0] || null)}
+            className="border p-2 rounded w-full"
+          />
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="bg-primary dark:bg-white text-white dark:text-black w-full py-6 flex items-center justify-center gap-3 transition-transform active:scale-[0.98] group">
+            <span className="font-sans font-medium tracking-widest text-sm uppercase pl-4">
+              {loading ? "Loading..." : "Start Case"}
+            </span>
+            <span className="material-icons text-xl group-hover:translate-x-1 transition-transform">
+              arrow_forward
+            </span>
+          </button>
+        </main>
 
-  useEffect(() => {
-    if (!token || !caseId) return;
-    const validateInvite = async () => {
-      try {
-        const inviteRef = doc(db, "invites", token);
-        const inviteSnap = await getDoc(inviteRef);
-        if (!inviteSnap.exists()) {
-          throw new Error("Invite not found");
-        }
-        const data = inviteSnap.data();
-        if (data.caseId !== caseId) {
-          alert("invalid invite for this case");
-          return; // Ensure token matches the case
-        }
-        if (data.expiresAt < Date.now()) {
-          alert("invite expired");
-          return; // Check expiry
-        }
-
-        if (data.used) {
-          alert("Invite already used.");
-          return;
-        }
-
-        await updateDoc(inviteRef, {
-          used: true,
-          defendant_joined: true
-        });
-
-      } catch (error) {
-        console.error("Failed to validate invite:", error);
-      }
-
-    };
-
-    validateInvite();
-  }, [token, caseId]);
-
-
-
-  // Error Prevention: Handle the "Loading" state
-  if (loading) {
-    return <div style={{ padding: 20 }}>Loading messages...</div>;
-  }
-
-return (
-  <div style={{ padding: 20, paddingBottom: 120 }}>
-    <h2>Case ID: {caseId}</h2>
-    <h3>Settlement Progress</h3>
-    <SettlementMeter value={meter} />
-
-    <div
-      style={{
-        border: "1px solid #ccc",
-        padding: 20,
-        height: 400,
-        overflowY: "scroll",
-      }}
-    >
-      {!isMyTurn && ( <p style={{ color: "gray", marginTop: 5 }}> Waiting for opponent's turn... </p> )}
-      {messages?.map((msg: CaseMessage) => (
-        <div
-          key={msg.id}
-          style={{
-            textAlign:
-              msg.role === "plaintiff" ? "left" : "right",
-            marginBottom: 10,
-          }}
-        >
-          <strong>{msg.role}</strong>: {msg.content}
-        </div>
-      ))}
+        {/* Footer */}
+        <footer className="mt-auto pt-8 pb-12 space-y-10">
+          <p className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400 font-sans px-2">
+            Lex-Machina is a pre-court negotiation and settlement support tool — not a replacement for lawyers or judges.
+          </p>
+          <div className="space-y-6">
+            <div className="h-[1px] w-full bg-gray-200 dark:bg-gray-800"></div>
+            <div className="flex flex-col items-center gap-6 text-[12px] font-medium text-gray-400 uppercase tracking-wider">
+              <p>© 2026 Lex-Machina. All rights reserved.</p>
+              <div className="flex gap-8">
+                <a className="hover:text-primary dark:hover:text-white transition-colors" href="#">
+                  Privacy Policy
+                </a>
+                <a className="hover:text-primary dark:hover:text-white transition-colors" href="#">
+                  Terms of Service
+                </a>
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
     </div>
-
-    {/* Footer Console */}
-    <StrategyConsole
-      onSend={handleSend}
-      disabled={!isMyTurn}
-    />
-  </div>
-);
-
+  );
 }
