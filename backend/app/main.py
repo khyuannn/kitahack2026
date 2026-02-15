@@ -2,20 +2,28 @@
 FastAPI backend for BYP case management.
 Integrates with Firebase, orchestrator, and frontend per contract.md.
 Phase 1: basic api, firestore integration, dump loop
+phase 2: turn-based negotiation with RAG, auditor, and TTS
 """
 import os
+import json
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, status, HTTPException
+from fastapi import FastAPI, Request, status, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
-from typing import Optional
+from typing import Optional, Dict, Any
 from backend.core import orchestrator
 from backend.core.orchestrator import run_dumb_loop, get_case_result, run_case as orchestrator_run_case
 import threading
+
+#phase 2
+from backend.logic import evidence_validator
+from backend.core import auditor
+# from backend.tts import voice   #add later if need
 
 from backend.app.api_models import (
     CaseEvidenceRequest,
@@ -25,6 +33,13 @@ from backend.app.api_models import (
     RunCaseResponse,
     StartCaseRequest,
     StartCaseResponse,
+    TurnRequest,  #phase2
+    TurnResponse,
+    ValidateEvidenceRequest,
+    ValidateEvidenceResponse,
+    ChipOptions,
+    CourtFilingRequest,
+    CourtFilingResponse,
 )
 
 load_dotenv()
@@ -247,3 +262,272 @@ async def get_case_result(caseId: str) -> GetCaseResultResponse:
 async def health_check():
     """Health check endpoint."""
     return {"status": "ok", "firebase": db is not None}
+
+# ---------------------------------------------
+# Phase 2 endpoints 
+# -----------------------------------------------
+
+@app.post(
+    "/api/cases/{caseId}/validate-evidence",
+    response_model=ValidateEvidenceResponse,
+    status_code=200,
+)
+async def validate_evidence_endpoint(
+    caseId: str,
+    request: ValidateEvidenceRequest,
+) -> ValidateEvidenceResponse:
+    """
+    Phase 2: Validate evidence using M2's Gemini Vision.
+    
+    Flow:
+    1. Check case exists
+    2. Call M2's evidence.validate_evidence()
+    3. Return validation result + Gemini File API URI
+    """
+    # Validate case exists
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        if not case_ref.get().exists:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Case with ID {caseId} not found.",
+            )
+    
+    # Call M2's evidence validator
+    try:
+        result = evidence_validator.validate_evidence(
+            file_url=request.image_url,
+            user_claim=request.user_claim
+        )
+        
+        # Check for errors from M2's module
+        if result.get("error"):
+            raise HTTPException(
+                status_code=400,
+                detail=result["error"]
+            )
+        
+        # Map M2's output to our API model
+        return ValidateEvidenceResponse(
+            is_relevant=result["is_relevant"],
+            summary_for_agent=request.user_claim,  # Simple pass-through for Phase 2
+            confidence_score=result["confidence_score"],
+            file_uri=result.get("file_uri")
+        )
+    
+    except Exception as e:
+        print(f"❌ Evidence validation error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Evidence validation failed: {str(e)}"
+        )
+
+
+@app.post(
+    "/api/cases/{caseId}/next-turn",
+    response_model=TurnResponse,
+    status_code=200,
+)
+async def next_turn(
+    caseId: str,
+    request: TurnRequest,
+) -> TurnResponse:
+    """
+    Phase 2: Handle one negotiation turn.
+    
+    Flow:
+    1. Validate case exists and is active
+    2. Generate AI response (with RAG if mode=full)
+    3. Run auditor validation
+    4. Return response with chips and audio URL
+    
+    NOTE: This is a simplified Phase 2 implementation.
+    Full implementation will use orchestrator.run_negotiation_turn().
+    """
+    # Validate case
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        case_doc = case_ref.get()
+        
+        if not case_doc.exists:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Case with ID {caseId} not found.",
+            )
+        
+        case_data = case_doc.to_dict()
+        case_status = case_data.get("status", "created")
+        
+        if case_status == "done":
+            raise HTTPException(
+                status_code=400,
+                detail="Case has already completed."
+            )
+    
+    # TODO: Phase 2 - Implement full turn logic
+    # For now, return a placeholder response
+    
+    try:
+        # Simplified response for Phase 2 initial integration
+        # Full implementation will:
+        # 1. Call orchestrator.run_negotiation_turn()
+        # 2. Generate audio with voice.generate_audio_bytes()
+        # 3. Upload audio to Firebase Storage
+        # 4. Generate chips with M1's chips.py
+        
+        return TurnResponse(
+            agent_message="[Phase 2 TODO] AI response will be generated here",
+            audio_url=None,  # TODO: Generate audio
+            auditor_passed=True,
+            auditor_warning=None,
+            chips=None,  # TODO: Generate chips
+            game_state="active",
+            counter_offer_rm=None,
+        )
+    
+    except Exception as e:
+        print(f"❌ Turn error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Turn processing failed: {str(e)}"
+        )
+
+
+@app.post(
+    "/api/cases/{caseId}/auditor/validate",
+    status_code=200,
+)
+async def auditor_validate_turn(
+    caseId: str,
+    agent_text: str,
+) -> Dict[str, Any]:
+    """
+    Phase 2: Validate AI response with M2's auditor.
+    
+    This is an internal endpoint for testing.
+    In production, auditor is called internally by orchestrator.
+    """
+    try:
+        # Call M2's auditor
+        result = auditor.validate_turn(agent_text)
+        
+        return {
+            "is_valid": result["is_valid"],
+            "flagged_law": result.get("flagged_law"),
+            "auditor_warning": result.get("auditor_warning"),
+            "citations_found": result.get("citations_found", []),
+        }
+    
+    except Exception as e:
+        print(f"❌ Auditor error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Auditor validation failed: {str(e)}"
+        )
+
+
+@app.post(
+    "/api/cases/{caseId}/export-pdf",
+    response_model=CourtFilingResponse,
+    status_code=200,
+)
+async def export_court_filing(
+    caseId: str,
+) -> CourtFilingResponse:
+    """
+    Phase 2: Generate court filing JSON (Form 198).
+    
+    Flow:
+    1. Retrieve case data and messages
+    2. Generate structured summary
+    3. Return JSON for frontend to render as printable HTML
+    
+    TODO: Integrate with M1's prompts/court_filing.py when ready
+    """
+    # Validate case
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        case_doc = case_ref.get()
+        
+        if not case_doc.exists:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Case with ID {caseId} not found.",
+            )
+        
+        case_data = case_doc.to_dict()
+        
+        # Retrieve messages
+        messages = []
+        messages_ref = case_ref.collection("messages").order_by("createdAt").stream()
+        for msg_doc in messages_ref:
+            msg_data = msg_doc.to_dict()
+            messages.append({
+                "role": msg_data.get("role"),
+                "content": msg_data.get("content"),
+                "round": msg_data.get("round"),
+            })
+        
+        # TODO: Call M1's court_filing.generate_filing_summary()
+        # For now, return a placeholder
+        
+        return CourtFilingResponse(
+            plaintiff_details="[TODO] Extract from case data",
+            defendant_details="[TODO] Extract from case data",
+            statement_of_claim=f"Plaintiff claims settlement for {case_data.get('title', 'dispute')}",
+            amount_claimed="RM [TODO]",
+            facts_list=[
+                "[TODO] Extract facts from messages",
+                "[TODO] Include evidence summaries",
+            ],
+            negotiation_summary=f"Negotiation attempted over {len(messages)} messages but failed to reach settlement."
+        )
+    
+    raise HTTPException(
+        status_code=500,
+        detail="Firebase not available"
+    )
+
+
+# =============================================================================
+# Phase 2 Helper Endpoints (Optional - for testing)
+# =============================================================================
+
+@app.get("/api/cases/{caseId}/messages")
+async def get_messages(caseId: str):
+    """
+    Get all messages for a case (for debugging).
+    Not part of the frozen contract.
+    """
+    if db:
+        messages_ref = db.collection("cases").document(caseId).collection("messages")
+        messages = messages_ref.order_by("createdAt").stream()
+        
+        return [
+            {"id": msg.id, **msg.to_dict()}
+            for msg in messages
+        ]
+    
+    return {"message": "Firebase not initialized"}
+
+
+@app.get("/api/debug/test-auditor")
+async def test_auditor():
+    """Test M2's auditor module."""
+    test_text = "Under section 15 of Sale of Goods Act 1957, this is a sale by description."
+    
+    result = auditor.validate_turn(test_text)
+    
+    return {
+        "test_text": test_text,
+        "result": result
+    }
+
+
+@app.get("/api/debug/test-evidence")
+async def test_evidence():
+    """Test M2's evidence validator."""
+    # This would need a real file URL
+    return {
+        "message": "Evidence validator requires a file URL. Use POST /api/cases/{id}/validate-evidence instead."
+    }
