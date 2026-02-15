@@ -12,6 +12,7 @@ from firebase_admin import firestore, storage
 from google import genai
 from google.genai import types
 import json
+from backend.logic.neurosymbolic import evaluate_game_state
 
 # =====================================================================
 # Import M1's Prompts 
@@ -67,6 +68,66 @@ def call_gemini_with_retry(prompt: str, max_retries: int = 5) -> str:
 # =============================================================================
 # Phase 2: Turn-Based Negotiation
 # =============================================================================
+def inject_mediator_guidance(case_id: str) -> None:
+    """
+    After Round 2, inject mediator guidance message.
+    This is NOT the final settlement, just neutral advice.
+    Called at the start of Round 3.
+    """
+    db = get_db()
+    case_ref = db.collection("cases").document(case_id)
+    
+    try:
+        print(f"⚖️  Injecting mediator guidance (Round 2.5)")
+        
+        # Get case data
+        case_data = case_ref.get().to_dict()
+        case_title = case_data.get("title")
+        
+        # Get recent messages
+        messages_ref = case_ref.collection("messages")
+        recent_messages = messages_ref.order_by("createdAt", direction=firestore.Query.DESCENDING).limit(4).stream()
+        
+        history = []
+        for msg_doc in recent_messages:
+            msg_data = msg_doc.to_dict()
+            history.append(f"{msg_data.get('role').upper()}: {msg_data.get('content')[:150]}...")
+        
+        history.reverse()  # Chronological order
+        conversation_summary = "\n".join(history)
+        
+        # Simple mediator guidance (not using LLM to save quota)
+        guidance_text = f"""⚖️ **Mediator Guidance**
+
+I've reviewed the arguments from both parties. Here's my neutral assessment:
+
+**Key Points:**
+- Both parties have presented valid concerns
+- The dispute centers on: {case_title}
+- Consider finding middle ground
+
+**Recommendation:**
+- Focus on facts and evidence
+- Be willing to compromise
+- Remember: Going to court costs time and money
+
+This is Round 3. Please make a reasonable counter-offer to move toward settlement.
+
+_Note: This is AI-generated guidance, not legal advice._"""
+        
+        # Save to Firestore
+        case_ref.collection("messages").add({
+            "role": "mediator",
+            "content": guidance_text,
+            "round": 2.5,  # Between Round 2 and 3
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "is_guidance": True
+        })
+        
+        print(f"✅ Mediator guidance injected")
+        
+    except Exception as e:
+        print(f"⚠️  Failed to inject mediator guidance: {e}")
 
 def run_negotiation_turn(
     case_id: str,
@@ -148,7 +209,11 @@ def run_negotiation_turn(
         
         # Build case facts summary
         case_facts = f"Case Type: {case_type}\nTitle: {case_title}\nEvidence Summary: {evidence_context}"
-        
+        # =====================================================================
+        # Special: Inject mediator guidance at Round 3
+        # =====================================================================
+        if current_round == 3:
+            inject_mediator_guidance(case_id)
         # =====================================================================
         # Step 2: Save user's message first
         # =====================================================================
@@ -242,6 +307,7 @@ Now respond as the {agent_role}. Remember to output ONLY valid JSON."""
         agent_text = None
         counter_offer = None
         retry_count = 0
+        game_eval = {"has_offer": False, "offer_amount": None, "meets_floor": False}  
         
         while retry_count <= MAX_AUDITOR_RETRIES and not auditor_passed:
             # Generate AI response
@@ -258,14 +324,16 @@ Now respond as the {agent_role}. Remember to output ONLY valid JSON."""
                 
                 response_json = json.loads(cleaned)
                 agent_text = response_json.get("message", cleaned)
-                counter_offer = response_json.get("counter_offer_rm")
+                game_eval = evaluate_game_state(response_json, floor_price or 0)
+                counter_offer = game_eval["offer_amount"]
                 
                 print(f"✅ JSON parsed successfully")
-                
+                print(f"💰 Neurosymbolic eval: offer={counter_offer}, meets_floor={game_eval['meets_floor']}")
             except json.JSONDecodeError:
                 print(f"⚠️  JSON parse failed, using raw text")
                 agent_text = raw_response
                 counter_offer = None
+                game_eval = {"has_offer": False, "offer_amount": None, "meets_floor": False}
             
             # Run auditor validation
             print(f"🛡️  [Auditor] Validating response (attempt {retry_count + 1}/{MAX_AUDITOR_RETRIES + 1})...")
@@ -329,11 +397,10 @@ Now respond as the {agent_role}. Remember to output ONLY valid JSON."""
         # =====================================================================
         # Step 8: Determine game state (Neurosymbolic logic)
         # =====================================================================
+      
         game_state = "active"
         
-        # Check if settlement reached (floor price met)
-        if counter_offer and floor_price:
-            if counter_offer >= floor_price:
+        if game_eval.get("meets_floor"):
                 game_state = "settled"
                 case_ref.update({"status": "done"})
                 print(f"🎉 Settlement reached! Offer ({counter_offer}) meets floor ({floor_price})")
@@ -348,10 +415,9 @@ Now respond as the {agent_role}. Remember to output ONLY valid JSON."""
         # TODO: Add more sophisticated deadlock detection
         
         # =====================================================================
-        # Step 9: Generate chips (TODO - when M1 completes chips.py)
+        # Step 9: Generate chips 
         # =====================================================================
         chips = None
-        # TODO: Implement when M1 creates chips.py
         try:
             #prepeare context for chips 
             conversation_history_str = "\n".join([
@@ -366,7 +432,6 @@ Now respond as the {agent_role}. Remember to output ONLY valid JSON."""
             #generate chips prompt
             chips_prompt = generate_chips_prompt(
                 conversation_history=conversation_history_str,
-                case_facts=case_facts,
                 case_context=case_context_dict
             )
             # Call Gemini to get chips
