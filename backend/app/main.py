@@ -16,6 +16,7 @@ from typing import Optional
 from backend.core import orchestrator
 from backend.core.orchestrator import run_dumb_loop, get_case_result, run_case as orchestrator_run_case
 import threading
+from backend.core.orchestrator import TurnRequest, TurnResponse
 
 from backend.app.api_models import (
     CaseEvidenceRequest,
@@ -242,6 +243,49 @@ async def get_case_result(caseId: str) -> GetCaseResultResponse:
         status="running",
         settlement=None,
     )
+@app.post("/api/cases/{caseId}/next-turn", response_model=TurnResponse)
+async def next_turn(caseId: str,request: TurnRequest) -> TurnResponse:
+    """Phase 2: Handle one negotiation turn."""
+    
+    # Import the new function
+    from backend.core.orchestrator import run_negotiation_turn
+    
+    # Validate case
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        case_doc = case_ref.get()
+        
+        if not case_doc.exists:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        if case_doc.to_dict().get("status") == "done":
+            raise HTTPException(status_code=400, detail="Case already completed")
+    
+    try:
+        # Call the orchestrator
+        result = run_negotiation_turn(
+            case_id=caseId,
+            user_message=request.user_message,
+            current_round=request.current_round,
+            user_role="plaintiff",  # User plays as plaintiff
+            evidence_uris=request.evidence_uris,
+            floor_price=request.floor_price,
+        )
+        
+        # Map to TurnResponse
+        return TurnResponse(
+            agent_message=result["agent_message"],
+            audio_url=result["audio_url"],
+            auditor_passed=result["auditor_passed"],
+            auditor_warning=result["auditor_warning"],
+            chips=result["chips"],
+            game_state=result["game_state"],
+            counter_offer_rm=result["counter_offer_rm"],
+        )
+    
+    except Exception as e:
+        print(f"❌ Turn error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
