@@ -16,14 +16,13 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
 from typing import Optional, Dict, Any
-from backend.core import orchestrator
 from backend.core.orchestrator import run_dumb_loop, get_case_result, run_case as orchestrator_run_case
 import threading
-from backend.core.orchestrator import TurnRequest, TurnResponse
-
+from backend.prompts.court_filing import COURT_FILING_PROMPT
+from backend.core.orchestrator import call_gemini_with_retry, build_plaintiff_prompt, build_defendant_prompt
 #phase 2
-from backend.logic import evidence_validator
-from backend.core import auditor
+from backend.logic.evidence import validate_evidence 
+from backend.core.auditor import validate_turn
 # from backend.tts import voice   #add later if need
 
 from backend.app.api_models import (
@@ -339,7 +338,7 @@ async def validate_evidence_endpoint(
     
     # Call M2's evidence validator
     try:
-        result = evidence_validator.validate_evidence(
+        result = validate_evidence(
             file_url=request.image_url,
             user_claim=request.user_claim
         )
@@ -453,7 +452,7 @@ async def auditor_validate_turn(
     """
     try:
         # Call M2's auditor
-        result = auditor.validate_turn(agent_text)
+        result = validate_turn(agent_text)
         
         return {
             "is_valid": result["is_valid"],
@@ -486,7 +485,7 @@ async def export_court_filing(
     2. Generate structured summary
     3. Return JSON for frontend to render as printable HTML
     
-    TODO: Integrate with M1's prompts/court_filing.py when ready
+    
     """
     # Validate case
     if db:
@@ -512,21 +511,62 @@ async def export_court_filing(
                 "round": msg_data.get("round"),
             })
         
-        # TODO: Call M1's court_filing.generate_filing_summary()
-        # For now, return a placeholder
+        conversation_history = "\n".join([
+            f"[Round {m['round']}] {m['role'].upper()}: {m['content']}"
+            for m in messages
+        ])
         
-        return CourtFilingResponse(
-            plaintiff_details="[TODO] Extract from case data",
-            defendant_details="[TODO] Extract from case data",
-            statement_of_claim=f"Plaintiff claims settlement for {case_data.get('title', 'dispute')}",
-            amount_claimed="RM [TODO]",
-            facts_list=[
-                "[TODO] Extract facts from messages",
-                "[TODO] Include evidence summaries",
-            ],
-            negotiation_summary=f"Negotiation attempted over {len(messages)} messages but failed to reach settlement."
+        # Get legal context
+        from backend.rag.retrieval import retrieve_law
+        legal_docs = retrieve_law(case_data.get('title', ''))
+        legal_context = "\n".join([
+            f"- {d['law']} s.{d['section']}: {d['excerpt'][:200]}"
+            for d in legal_docs
+        ])
+        
+        # Build prompt
+        filing_prompt = COURT_FILING_PROMPT.replace(
+            "{case_facts}", f"Case: {case_data.get('title')}"
+        ).replace(
+            "{conversation_history}", conversation_history
+        ).replace(
+            "{legal_context}", legal_context
+        ).replace(
+            "{round_number}", str(len(messages))
         )
-    
+        
+        # Generate filing
+        raw_response = call_gemini_with_retry(filing_prompt)
+        
+        # Parse JSON
+        try:
+            cleaned = raw_response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+            
+            filing_json = json.loads(cleaned)
+            return CourtFilingResponse(
+                plaintiff_details="[TODO] Extract from case data",
+                defendant_details="[TODO] Extract from case data",
+                statement_of_claim=f"Plaintiff claims settlement for {case_data.get('title', 'dispute')}",
+                amount_claimed="RM [TODO]",
+                facts_list=[
+                    f"Plaintiff's final offer: RM {filing_json.get('final_plaintiff_offer_rm', 0)}",
+                    f"Defendant's final offer: RM {filing_json.get('final_defendant_offer_rm', 0)}",
+                    filing_json.get("disclaimer", ""),
+                ],
+                negotiation_summary=f"Status: {filing_json.get('negotiation_status', 'deadlock')}"
+            )
+        except Exception as e:
+            #fallback
+            return CourtFilingResponse(
+                plaintiff_details="User",
+                defendant_details="Opponent",
+                statement_of_claim=f"Dispute regarding: {case_data.get('title')}",
+                amount_claimed="RM [TBD]",
+                facts_list=["Negotiation failed", "Please consult lawyer"],
+                negotiation_summary="Deadlock reached"
+            )
     raise HTTPException(
         status_code=500,
         detail="Firebase not available"
@@ -560,7 +600,7 @@ async def test_auditor():
     """Test M2's auditor module."""
     test_text = "Under section 15 of Sale of Goods Act 1957, this is a sale by description."
     
-    result = auditor.validate_turn(test_text)
+    result = validate_turn(test_text)
     
     return {
         "test_text": test_text,

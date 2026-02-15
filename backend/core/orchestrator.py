@@ -16,12 +16,13 @@ import json
 # =====================================================================
 # Import M1's Prompts 
 # =====================================================================
-from backend.prompts.plaintiff import PLAINTIFF_SYS_PROMPT
-from backend.prompts.defendant import DEFENDANT_SYS_PROMPT
-from backend.prompts.mediator import MEDIATOR_SYS_PROMPT  # For Phase 2
+from backend.prompts.plaintiff import build_plaintiff_prompt
+from backend.prompts.defendant import build_defendant_prompt
+from backend.prompts.mediator import build_mediator_prompt  # For Phase 2
 from backend.rag.retrieval import retrieve_law
 from backend.core.auditor import validate_turn
 from backend.logic.evidence import validate_evidence
+from backend.prompts.chips import generate_chips_prompt
 
 # Import agent graph (Phase 1.5)
 try:
@@ -199,19 +200,28 @@ def run_negotiation_turn(
             f"[{msg['role'].upper()}]: {msg['content']}"
             for msg in history[-6:]  # Last 6 messages for context
         ])
-        
-        # Build defendant prompt using M1's template
-        system_prompt = DEFENDANT_SYS_PROMPT.replace(
-            "{opponent_role}", user_role
-        ).replace(
-            "{case_facts}", case_facts
-        ).replace(
-            "{floor_price}", str(floor_price or 0)
-        ).replace(
-            "{legal_context}", legal_context
-        ).replace(
-            "{round_number}", str(current_round)
-        )
+
+        # ✅ Build prompt using M1's function
+        case_data_dict = {
+            "case_title": case_title,
+            "case_type": case_type,
+            "case_facts": case_facts,
+            "evidence_summary": evidence_context,
+            "floor_price": floor_price or 0,
+            "legal_context": legal_context,
+        }
+
+        # Call M1's build function
+        if agent_role == "defendant":
+            system_prompt = build_defendant_prompt(
+                case_data=case_data_dict,
+                current_round=current_round
+            )
+        else:
+            system_prompt = build_plaintiff_prompt(
+                case_data=case_data_dict,
+                current_round=current_round
+            )
         
         full_prompt = f"""{system_prompt}
 
@@ -342,11 +352,42 @@ Now respond as the {agent_role}. Remember to output ONLY valid JSON."""
         # =====================================================================
         chips = None
         # TODO: Implement when M1 creates chips.py
-        # try:
-        #     from backend.prompts.chips import generate_chips_prompt
-        #     chips = generate_chips_prompt(agent_text, case_facts)
-        # except Exception as e:
-        #     print(f"⚠️  Chips generation skipped: {e}")
+        try:
+            #prepeare context for chips 
+            conversation_history_str = "\n".join([
+                f"[{msg['role'].upper()}]: {msg['content'][:100]}..."
+                for msg in history[-4:]  # Last 4 messages for chips context
+            ])
+            case_context_dict = {
+                "case_title": case_title,
+                "current_round": current_round,
+                "counter_offer": counter_offer,
+            }
+            #generate chips prompt
+            chips_prompt = generate_chips_prompt(
+                conversation_history=conversation_history_str,
+                case_facts=case_facts,
+                case_context=case_context_dict
+            )
+            # Call Gemini to get chips
+            print(f"🎮 Generating strategy chips...")
+            chips_response = call_gemini_with_retry(chips_prompt)
+
+            # Parse chips JSON
+            try:
+                chips_cleaned = chips_response.strip()
+                if chips_cleaned.startswith("```json"):
+                    chips_cleaned = chips_cleaned.split("```json")[1].split("```")[0].strip()
+                elif chips_cleaned.startswith("```"):
+                    chips_cleaned = chips_cleaned.split("```")[1].split("```")[0].strip()
+                
+                chips = json.loads(chips_cleaned)
+                print(f"✅ Chips generated: {chips.get('question', '')}")
+            except json.JSONDecodeError:
+                print(f"⚠️  Failed to parse chips JSON")
+                chips = None
+        except Exception as e:
+            print(f"⚠️  Chips generation skipped: {e}")
         
         # =====================================================================
         # Step 10: Return response
@@ -470,19 +511,18 @@ def generate_mediator_settlement(case_id: str) -> Dict[str, Any]:
         ])
         
         # Build mediator prompt
-        mediator_prompt = MEDIATOR_SYS_PROMPT.replace(
-            "{legal_context}", legal_context
-        ).replace(
-            "{conversation_history}", history_text
+        case_data_dict = {
+            "legal_context": legal_context,
+            "case_title": case_title,
+        }
+        mediator_prompt = build_mediator_prompt(
+            case_data=case_data_dict,
+            conversation_history=history_text,
         )
         
-        full_prompt = f"""{mediator_prompt}
-
-Based on the above negotiation, generate a fair settlement recommendation."""
-
         # Generate settlement
         print(f"🤖 Calling Gemini for mediator settlement...")
-        raw_response = call_gemini_with_retry(full_prompt)
+        raw_response = call_gemini_with_retry(mediator_prompt)
         
         # Parse JSON
         try:
@@ -571,24 +611,41 @@ def run_dumb_loop(case_id: str, mode: str = "mvp") -> None:
         legal_docs = retrieve_law(case_title) 
         legal_context_str = "\n".join([f"- {d['law']} s.{d['section']}: {d['excerpt']}" for d in legal_docs])
 
+        # ✅ Build plaintiff prompt using M1's function (Phase 1 simplified)
+        case_data_dict = {
+            "case_title": case_title,
+            "case_type": "tenancy_deposit",
+            "incident_date": "",
+            "dispute_amount": 0,
+            "short_description": case_title,
+            "case_facts": f"Case: {case_title}",
+            "evidence_summary": evidence_context,
+            "floor_price": 0,
+            "legal_context": legal_context_str,
+        }
         # Inject legal_context_str into the prompt format
         # Use replace() instead of format() to avoid issues with JSON braces {} in the prompt
-        system_instruction = PLAINTIFF_SYS_PROMPT.replace(
-            "{legal_context}", legal_context_str
-        ).replace(
-            "{evidence_facts}", evidence_context
+        # system_instruction = build_plaintiff_prompt(
+        #     legal_context=legal_context_str,
+        #     evidence_facts=evidence_context
+        # )
+
+        plaintiff_prompt = build_plaintiff_prompt(
+            case_data=case_data_dict,
+            current_round=1
         )
-
-        plaintiff_prompt = f"""{system_instruction}
-
-Case Title: {case_title}
-Available Evidence: {evidence_context}
-
-Make your opening argument."""
-
         plaintiff_text = call_gemini_with_retry(plaintiff_prompt)
+
+        # Try to parse JSON
+        try:
+            cleaned = plaintiff_text.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+            response_json = json.loads(cleaned)
+            plaintiff_text = response_json.get("message", plaintiff_text)
+        except:
+            pass  # Use raw text if JSON parse fails
         
-        # Write to Firestore (M4's UI will show this immediately via onSnapshot)
         messages_ref.add({
             "role": "plaintiff",
             "content": plaintiff_text,
@@ -603,18 +660,30 @@ Make your opening argument."""
         # =====================================================================
         print(f"[Orchestrator] Case {case_id}: Defendant responding...")
         
-        defendant_prompt = f"""{DEFENDANT_SYS_PROMPT}
+        defendant_prompt = f"""{build_defendant_prompt(
+            case_data=case_data_dict,
+            current_round=1
+        )}
 
-Case Title: {case_title}
-Available Evidence: {evidence_context}
+# Case Title: {case_title}
+# Available Evidence: {evidence_context}
 
-The landlord argued:
-"{plaintiff_text}"
+# The landlord argued:
+# "{plaintiff_text}"
 
-Respond to their argument."""
+# Respond to their argument."""
 
         defendant_text = call_gemini_with_retry(defendant_prompt)
         
+        # Try to parse JSON
+        try:
+            cleaned = defendant_text.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+            response_json = json.loads(cleaned)
+            defendant_text = response_json.get("message", defendant_text)
+        except:
+            pass
         # Write to Firestore
         messages_ref.add({
             "role": "defendant",
