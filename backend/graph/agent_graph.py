@@ -308,10 +308,9 @@ def run_negotiation_with_rag(case_id: str, mode: str = "mvp") -> None:
     5. End (status → "done")
     
     Phase 2 will expand this to:
-    - Multiple rounds
-    - Planner nodes
-    - Mediator settlement
-
+    - Multiple rounds   
+    - Planner nodes         # orchestrator already do
+    - Mediator settlement   # orchestrator already do - inject_mediator_guidance()
     Note: Phase 2's /next-turn endpoint uses orchestrator.run_negotiation_turn()
           This function is only used for /run endpoint (mode="full")
     """
