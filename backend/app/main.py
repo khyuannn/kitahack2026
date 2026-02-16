@@ -549,10 +549,10 @@ async def export_court_filing(
             
             filing_json = json.loads(cleaned)
             return CourtFilingResponse(
-                plaintiff_details="[TODO] Extract from case data",
-                defendant_details="[TODO] Extract from case data",
-                statement_of_claim=f"Plaintiff claims settlement for {case_data.get('title', 'dispute')}",
-                amount_claimed="RM [TODO]",
+                plaintiff_details=filing_json.get("plaintiff_details", "User (Plaintiff)"),
+                defendant_details=filing_json.get("defendant_details", "Opponent (Defendant)"),
+                statement_of_claim=filing_json.get("statement_of_claim", f"Dispute regarding: {case_data.get('title')}"),
+                amount_claimed=f"RM {filing_json.get('claimed_amount_rm', 'TBD')}",
                 facts_list=[
                     f"Plaintiff's final offer: RM {filing_json.get('final_plaintiff_offer_rm', 0)}",
                     f"Defendant's final offer: RM {filing_json.get('final_defendant_offer_rm', 0)}",
