@@ -16,14 +16,17 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
 from typing import Optional, Dict, Any
-from backend.core import orchestrator
 from backend.core.orchestrator import run_dumb_loop, get_case_result, run_case as orchestrator_run_case
 import threading
-
+from backend.prompts.court_filing import COURT_FILING_PROMPT
+from backend.core.orchestrator import call_gemini_with_retry
 #phase 2
-from backend.logic import evidence_validator
-from backend.core import auditor
+from backend.logic.evidence import validate_evidence 
+from backend.core.auditor import validate_turn
 # from backend.tts import voice   #add later if need
+
+from backend.prompts.plaintiff import build_plaintiff_prompt
+from backend.prompts.defendant import build_defendant_prompt
 
 from backend.app.api_models import (
     CaseEvidenceRequest,
@@ -257,6 +260,49 @@ async def get_case_result(caseId: str) -> GetCaseResultResponse:
         status="running",
         settlement=None,
     )
+@app.post("/api/cases/{caseId}/next-turn", response_model=TurnResponse)
+async def next_turn(caseId: str,request: TurnRequest) -> TurnResponse:
+    """Phase 2: Handle one negotiation turn."""
+    
+    # Import the new function
+    from backend.core.orchestrator import run_negotiation_turn
+    
+    # Validate case
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        case_doc = case_ref.get()
+        
+        if not case_doc.exists:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        if case_doc.to_dict().get("status") == "done":
+            raise HTTPException(status_code=400, detail="Case already completed")
+    
+    try:
+        # Call the orchestrator
+        result = run_negotiation_turn(
+            case_id=caseId,
+            user_message=request.user_message,
+            current_round=request.current_round,
+            user_role="plaintiff",  # User plays as plaintiff
+            evidence_uris=request.evidence_uris,
+            floor_price=request.floor_price,
+        )
+        
+        # Map to TurnResponse
+        return TurnResponse(
+            agent_message=result["agent_message"],
+            audio_url=result["audio_url"],
+            auditor_passed=result["auditor_passed"],
+            auditor_warning=result["auditor_warning"],
+            chips=result["chips"],
+            game_state=result["game_state"],
+            counter_offer_rm=result["counter_offer_rm"],
+        )
+    
+    except Exception as e:
+        print(f"❌ Turn error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
@@ -295,7 +341,7 @@ async def validate_evidence_endpoint(
     
     # Call M2's evidence validator
     try:
-        result = evidence_validator.validate_evidence(
+        result = validate_evidence(
             file_url=request.image_url,
             user_claim=request.user_claim
         )
@@ -322,75 +368,75 @@ async def validate_evidence_endpoint(
             detail=f"Evidence validation failed: {str(e)}"
         )
 
-
-@app.post(
-    "/api/cases/{caseId}/next-turn",
-    response_model=TurnResponse,
-    status_code=200,
-)
-async def next_turn(
-    caseId: str,
-    request: TurnRequest,
-) -> TurnResponse:
-    """
-    Phase 2: Handle one negotiation turn.
+#this repeat with upside, but incase retain it for checking
+# @app.post(
+#     "/api/cases/{caseId}/next-turn",
+#     response_model=TurnResponse,
+#     status_code=200,
+# )
+# async def next_turn(
+#     caseId: str,
+#     request: TurnRequest,
+# ) -> TurnResponse:
+#     """
+#     Phase 2: Handle one negotiation turn.
     
-    Flow:
-    1. Validate case exists and is active
-    2. Generate AI response (with RAG if mode=full)
-    3. Run auditor validation
-    4. Return response with chips and audio URL
+#     Flow:
+#     1. Validate case exists and is active
+#     2. Generate AI response (with RAG if mode=full)
+#     3. Run auditor validation
+#     4. Return response with chips and audio URL
     
-    NOTE: This is a simplified Phase 2 implementation.
-    Full implementation will use orchestrator.run_negotiation_turn().
-    """
-    # Validate case
-    if db:
-        case_ref = db.collection("cases").document(caseId)
-        case_doc = case_ref.get()
+#     NOTE: This is a simplified Phase 2 implementation.
+#     Full implementation will use orchestrator.run_negotiation_turn().
+#     """
+#     # Validate case
+#     if db:
+#         case_ref = db.collection("cases").document(caseId)
+#         case_doc = case_ref.get()
         
-        if not case_doc.exists:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Case with ID {caseId} not found.",
-            )
+#         if not case_doc.exists:
+#             raise HTTPException(
+#                 status_code=404,
+#                 detail=f"Case with ID {caseId} not found.",
+#             )
         
-        case_data = case_doc.to_dict()
-        case_status = case_data.get("status", "created")
+#         case_data = case_doc.to_dict()
+#         case_status = case_data.get("status", "created")
         
-        if case_status == "done":
-            raise HTTPException(
-                status_code=400,
-                detail="Case has already completed."
-            )
+#         if case_status == "done":
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail="Case has already completed."
+#             )
     
-    # TODO: Phase 2 - Implement full turn logic
-    # For now, return a placeholder response
+#     # TODO: Phase 2 - Implement full turn logic
+#     # For now, return a placeholder response
     
-    try:
-        # Simplified response for Phase 2 initial integration
-        # Full implementation will:
-        # 1. Call orchestrator.run_negotiation_turn()
-        # 2. Generate audio with voice.generate_audio_bytes()
-        # 3. Upload audio to Firebase Storage
-        # 4. Generate chips with M1's chips.py
+#     try:
+#         # Simplified response for Phase 2 initial integration
+#         # Full implementation will:
+#         # 1. Call orchestrator.run_negotiation_turn()
+#         # 2. Generate audio with voice.generate_audio_bytes()
+#         # 3. Upload audio to Firebase Storage
+#         # 4. Generate chips with M1's chips.py
         
-        return TurnResponse(
-            agent_message="[Phase 2 TODO] AI response will be generated here",
-            audio_url=None,  # TODO: Generate audio
-            auditor_passed=True,
-            auditor_warning=None,
-            chips=None,  # TODO: Generate chips
-            game_state="active",
-            counter_offer_rm=None,
-        )
+#         return TurnResponse(
+#             agent_message="[Phase 2 TODO] AI response will be generated here",
+#             audio_url=None,  # TODO: Generate audio
+#             auditor_passed=True,
+#             auditor_warning=None,
+#             chips=None,  # TODO: Generate chips
+#             game_state="active",
+#             counter_offer_rm=None,
+#         )
     
-    except Exception as e:
-        print(f"❌ Turn error: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Turn processing failed: {str(e)}"
-        )
+#     except Exception as e:
+#         print(f"❌ Turn error: {str(e)}")
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"Turn processing failed: {str(e)}"
+#         )
 
 
 @app.post(
@@ -409,7 +455,7 @@ async def auditor_validate_turn(
     """
     try:
         # Call M2's auditor
-        result = auditor.validate_turn(agent_text)
+        result = validate_turn(agent_text)
         
         return {
             "is_valid": result["is_valid"],
@@ -442,7 +488,7 @@ async def export_court_filing(
     2. Generate structured summary
     3. Return JSON for frontend to render as printable HTML
     
-    TODO: Integrate with M1's prompts/court_filing.py when ready
+    
     """
     # Validate case
     if db:
@@ -468,21 +514,62 @@ async def export_court_filing(
                 "round": msg_data.get("round"),
             })
         
-        # TODO: Call M1's court_filing.generate_filing_summary()
-        # For now, return a placeholder
+        conversation_history = "\n".join([
+            f"[Round {m['round']}] {m['role'].upper()}: {m['content']}"
+            for m in messages
+        ])
         
-        return CourtFilingResponse(
-            plaintiff_details="[TODO] Extract from case data",
-            defendant_details="[TODO] Extract from case data",
-            statement_of_claim=f"Plaintiff claims settlement for {case_data.get('title', 'dispute')}",
-            amount_claimed="RM [TODO]",
-            facts_list=[
-                "[TODO] Extract facts from messages",
-                "[TODO] Include evidence summaries",
-            ],
-            negotiation_summary=f"Negotiation attempted over {len(messages)} messages but failed to reach settlement."
+        # Get legal context
+        from backend.rag.retrieval import retrieve_law
+        legal_docs = retrieve_law(case_data.get('title', ''))
+        legal_context = "\n".join([
+            f"- {d['law']} s.{d['section']}: {d['excerpt'][:200]}"
+            for d in legal_docs
+        ])
+        
+        # Build prompt
+        filing_prompt = COURT_FILING_PROMPT.replace(
+            "{case_facts}", f"Case: {case_data.get('title')}"
+        ).replace(
+            "{conversation_history}", conversation_history
+        ).replace(
+            "{legal_context}", legal_context
+        ).replace(
+            "{round_number}", str(len(messages))
         )
-    
+        
+        # Generate filing
+        raw_response = call_gemini_with_retry(filing_prompt)
+        
+        # Parse JSON
+        try:
+            cleaned = raw_response.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+            
+            filing_json = json.loads(cleaned)
+            return CourtFilingResponse(
+                plaintiff_details=filing_json.get("plaintiff_details", "User (Plaintiff)"),
+                defendant_details=filing_json.get("defendant_details", "Opponent (Defendant)"),
+                statement_of_claim=filing_json.get("statement_of_claim", f"Dispute regarding: {case_data.get('title')}"),
+                amount_claimed=f"RM {filing_json.get('claimed_amount_rm', 'TBD')}",
+                facts_list=[
+                    f"Plaintiff's final offer: RM {filing_json.get('final_plaintiff_offer_rm', 0)}",
+                    f"Defendant's final offer: RM {filing_json.get('final_defendant_offer_rm', 0)}",
+                    filing_json.get("disclaimer", ""),
+                ],
+                negotiation_summary=f"Status: {filing_json.get('negotiation_status', 'deadlock')}"
+            )
+        except Exception as e:
+            #fallback
+            return CourtFilingResponse(
+                plaintiff_details="User",
+                defendant_details="Opponent",
+                statement_of_claim=f"Dispute regarding: {case_data.get('title')}",
+                amount_claimed="RM [TBD]",
+                facts_list=["Negotiation failed", "Please consult lawyer"],
+                negotiation_summary="Deadlock reached"
+            )
     raise HTTPException(
         status_code=500,
         detail="Firebase not available"
@@ -516,7 +603,7 @@ async def test_auditor():
     """Test M2's auditor module."""
     test_text = "Under section 15 of Sale of Goods Act 1957, this is a sale by description."
     
-    result = auditor.validate_turn(test_text)
+    result = validate_turn(test_text)
     
     return {
         "test_text": test_text,
@@ -531,3 +618,81 @@ async def test_evidence():
     return {
         "message": "Evidence validator requires a file URL. Use POST /api/cases/{id}/validate-evidence instead."
     }
+# =============================================================================
+# Phase 2: Round 4.5 - Accept/Reject Endpoints
+# =============================================================================
+
+@app.post("/api/cases/{caseId}/accept-offer")
+async def accept_final_offer(caseId: str):
+    """
+    User accepts AI's final offer.
+    Generate settlement and mark case as done.
+    """
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        case_doc = case_ref.get()
+        
+        if not case_doc.exists:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        case_data = case_doc.to_dict()
+        
+        if case_data.get("status") == "done":
+            # Already settled, return existing settlement
+            return {
+                "status": "settled",
+                "settlement": case_data.get("settlement")
+            }
+        
+        # Generate final settlement
+        from backend.core.orchestrator import generate_mediator_settlement
+        
+        try:
+            settlement = generate_mediator_settlement(caseId)
+            
+            return {
+                "status": "settled",
+                "settlement": settlement,
+                "message": "Offer accepted. Settlement generated."
+            }
+        except Exception as e:
+            print(f"❌ Settlement generation error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    raise HTTPException(status_code=500, detail="Firebase not available")
+
+
+@app.post("/api/cases/{caseId}/reject-offer")
+async def reject_final_offer(caseId: str):
+    """
+    User rejects AI's final offer.
+    Update to deadlock status and prepare for court filing export.
+    """
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        case_doc = case_ref.get()
+        
+        if not case_doc.exists:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        # Update case status to deadlock
+        case_ref.update({
+            "status": "deadlock",
+            "game_state": "deadlock"
+        })
+        
+        # Add system message
+        case_ref.collection("messages").add({
+            "role": "system",
+            "content": "User rejected final offer. Negotiation ended in deadlock.",
+            "round": 4.5,
+            "createdAt": firestore.SERVER_TIMESTAMP
+        })
+        
+        return {
+            "status": "deadlock",
+            "message": "Offer rejected. You can now export the court filing form.",
+            "can_export": True
+        }
+    
+    raise HTTPException(status_code=500, detail="Firebase not available")
