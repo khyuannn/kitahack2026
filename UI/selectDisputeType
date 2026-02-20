@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Lex-Machina - Select Dispute Type</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&amp;family=Inter:wght@400;500;600&amp;family=Material+Icons+Round&amp;display=swap" rel="stylesheet"/>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#1A202C", // Dark navy/black for primary actions
+                        "background-light": "#F9FAFB",
+                        "background-dark": "#111827",
+                        "card-light": "#FFFFFF",
+                        "card-dark": "#1F2937",
+                        "accent-blue": "#2563EB",
+                        "accent-purple": "#A855F7",
+                        "accent-indigo": "#6366F1",
+                    },
+                    fontFamily: {
+                        serif: ["Playfair Display", "serif"],
+                        sans: ["Inter", "sans-serif"],
+                    },
+                    borderRadius: {
+                        DEFAULT: "0.5rem",
+                        'xl': '1rem',
+                        '2xl': '1.5rem',
+                    },
+                },
+            },
+        };
+    </script>
+<style>.font-serif-display {
+            font-family: 'Playfair Display', serif;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background-light dark:bg-background-dark text-gray-900 dark:text-gray-100 min-h-screen font-sans antialiased pb-12">
+<header class="bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 sticky top-0 z-10">
+<div class="max-w-md mx-auto px-6 py-4 flex items-center gap-4">
+<div class="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
+<span class="material-icons-round text-white text-2xl">balance</span>
+</div>
+<h1 class="font-serif-display font-bold text-2xl tracking-tight text-black dark:text-white">Lex-Machina</h1>
+</div>
+</header>
+<main class="max-w-md mx-auto px-6 py-8">
+<div class="flex items-center gap-2 mb-4">
+<span class="bg-black text-white text-xs font-bold px-2 py-1 rounded">Step 1</span>
+<span class="text-xs font-semibold text-gray-400 tracking-wide">OF 4</span>
+</div>
+<h2 class="font-serif-display text-4xl font-bold mb-3 text-gray-900 dark:text-white">Select Dispute Type</h2>
+<p class="text-gray-500 dark:text-gray-400 text-sm leading-relaxed mb-8">
+            Choose the category that best describes your legal claim.
+        </p>
+<div class="space-y-4">
+<div class="bg-white dark:bg-card-dark rounded-2xl p-6 border-2 border-blue-600 shadow-sm relative overflow-hidden group cursor-pointer transition-all">
+<div class="flex justify-between items-start mb-4">
+<div class="w-12 h-12 bg-blue-50 dark:bg-blue-900/30 rounded-xl flex items-center justify-center text-blue-600 dark:text-blue-400">
+<span class="material-icons-round text-2xl">apartment</span>
+</div>
+<span class="inline-flex items-center gap-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider">
+<span class="material-icons-round text-xs">check_circle</span>
+                        Autonomous Eligible
+                    </span>
+</div>
+<h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">Tenancy and Rental Dispute</h3>
+<p class="text-gray-500 dark:text-gray-400 text-sm leading-relaxed">
+                    Security deposit refunds, unpaid rent, or property damage disputes for residential properties.
+                </p>
+</div>
+<div class="bg-white dark:bg-card-dark rounded-2xl p-6 border border-gray-200 dark:border-gray-700 shadow-sm relative group cursor-pointer hover:border-blue-300 dark:hover:border-blue-800 transition-all">
+<div class="flex justify-between items-start mb-4">
+<div class="w-12 h-12 bg-purple-50 dark:bg-purple-900/30 rounded-xl flex items-center justify-center text-accent-purple dark:text-purple-400">
+<span class="material-icons-round text-2xl">shopping_bag</span>
+</div>
+<span class="inline-flex items-center gap-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider">
+<span class="material-icons-round text-xs">check_circle</span>
+                        Autonomous Eligible
+                    </span>
+</div>
+<h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">Consumer and E-Commerce Disputes</h3>
+<p class="text-gray-500 dark:text-gray-400 text-sm leading-relaxed">
+                    Defective goods, items not matching their description, or fake products bought online (e.g., Carousell/Shopee).
+                </p>
+</div>
+<div class="bg-white dark:bg-card-dark rounded-2xl p-6 border border-gray-200 dark:border-gray-700 shadow-sm relative group cursor-pointer hover:border-blue-300 dark:hover:border-blue-800 transition-all">
+<div class="flex justify-between items-start mb-4">
+<div class="w-12 h-12 bg-indigo-50 dark:bg-indigo-900/30 rounded-xl flex items-center justify-center text-accent-indigo dark:text-indigo-400">
+<span class="material-icons-round text-2xl">work_outline</span>
+</div>
+<span class="inline-flex items-center gap-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider">
+<span class="material-icons-round text-xs">check_circle</span>
+                        Autonomous Eligible
+                    </span>
+</div>
+<h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">Freelance and Unpaid Services</h3>
+<p class="text-gray-500 dark:text-gray-400 text-sm leading-relaxed">
+                    Unpaid invoices, breach of agreement, or failure to deliver services as promised between individuals or freelancers.
+                </p>
+</div>
+<div class="bg-transparent dark:bg-transparent rounded-2xl p-6 border-2 border-dashed border-gray-200 dark:border-gray-700 opacity-70">
+<div class="flex justify-between items-start mb-4">
+<div class="w-12 h-12 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center text-gray-400">
+<span class="material-icons-round text-2xl">more_horiz</span>
+</div>
+<span class="inline-flex items-center gap-1 bg-gray-100 dark:bg-gray-800 text-gray-500 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider">
+<span class="material-icons-round text-xs">schedule</span>
+                        Coming Soon - Post Beta
+                    </span>
+</div>
+<h3 class="text-lg font-bold text-gray-400 dark:text-gray-500 mb-2">Other Disputes</h3>
+<p class="text-gray-400 dark:text-gray-600 text-sm leading-relaxed">
+                    Additional dispute categories will be available in the full release.
+                </p>
+</div>
+</div>
+<div class="mt-8 bg-blue-50 dark:bg-blue-900/20 rounded-xl p-5 flex gap-3 items-start">
+<div class="bg-black dark:bg-white text-white dark:text-black rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5">
+<span class="text-xs font-bold serif">i</span>
+</div>
+<div>
+<h4 class="text-xs font-bold uppercase text-black dark:text-white mb-2 tracking-wide">Malaysian Jurisdiction Note</h4>
+<p class="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
+                    Cases under RM 5,000 are processed via the Small Claims Court framework. Lex-Machina uses these guidelines to optimize outcomes.
+                </p>
+</div>
+</div>
+<button class="w-full bg-[#1E293B] hover:bg-slate-800 text-white font-semibold py-4 px-6 rounded-lg mt-8 flex items-center justify-center gap-2 shadow-lg transition-colors group">
+<span class="text-lg">Initialize Case</span>
+<span class="material-icons-round group-hover:translate-x-1 transition-transform">arrow_forward</span>
+</button>
+<div class="mt-8 text-center space-y-4">
+<div class="flex justify-center gap-6 text-[11px] font-medium text-gray-400">
+<a class="hover:text-gray-600 dark:hover:text-gray-300" href="#">Privacy Policy</a>
+<a class="hover:text-gray-600 dark:hover:text-gray-300" href="#">Terms of Service</a>
+</div>
+<p class="text-[10px] text-gray-400">© 2026 Lex-Machine</p>
+</div>
+</main>
+
+</body></html>
