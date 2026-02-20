@@ -1,0 +1,46 @@
+"use client";
+import React, { useEffect, useRef, useState } from "react";
+
+interface AgentAudioPlayerProps {
+    messages: any[];
+}
+
+export default function AgentAudioPlayer({ messages }: AgentAudioPlayerProps) {
+  const [currentAudioUrl, setCurrentAudioUrl] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+
+    // Find the latest message with audioUrl
+    const lastAudioMsg = [...messages].reverse().find(msg => msg.audioUrl);
+
+    if (!lastAudioMsg || lastAudioMsg.audioUrl === currentAudioUrl) return;
+
+    setCurrentAudioUrl(lastAudioMsg.audioUrl);
+
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    if (lastAudioMsg.audioUrl) {
+      const audio = new Audio(lastAudioMsg.audioUrl);
+      audioRef.current = audio;
+
+      audio
+        .play()
+        .catch(err => {
+          console.warn("Auto-play failed, using fallback TTS.", err);
+
+          // Fallback: use speechSynthesis
+          if ("speechSynthesis" in window && lastAudioMsg.content) {
+            const utterance = new SpeechSynthesisUtterance(lastAudioMsg.content);
+            window.speechSynthesis.speak(utterance);
+          }
+        });
+    }
+  }, [messages, currentAudioUrl]);
+
+  return null; // Invisible player, all handled programmatically
+}
