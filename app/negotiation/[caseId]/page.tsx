@@ -1,145 +1,94 @@
-"use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useState, useEffect } from "react";
+import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "@/firebase/config";
-import { addDoc, collection } from "firebase/firestore";
-import SettlementMeter from "@/components/settlementMeter";
 
-export default function HomePage() {
+interface CourtFormData {
+  plaintiff_name: string;
+  defendant_name: string;
+  claim_amount: number;
+  details: string;
+}
+
+export default function DeadlockScreen({ caseId }: { caseId: string }) {
+  const [isDeadlock, setIsDeadlock] = useState(false);
+  const [pdfData, setPdfData] = useState<CourtFormData | null>(null);
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
-  const [role, setRole] = useState("plaintiff");
-  const [evidenceSummary, setEvidenceSummary] = useState("");
-  const [opponent, setOpponent] = useState("");
-  const [caseId, setCaseId] = useState("");
-  const [negotiationId, setNegotiationId] = useState("");
-  const [negotiationData, setNegotiationData] = useState({});
-  const [negotiationMessages, setNegotiationMessages] = useState([]);
-  const [negotiationLoading, setNegotiationLoading] = useState(false);
-  const [negotiationError, setNegotiationError] = useState("");
-  const [negotiationHistory, setNegotiationHistory] = useState([]);
-  const [negotiationHistoryLoading, setNegotiationHistoryLoading] = useState(false);
-  const [negotiationHistoryError, setNegotiationHistoryError] = useState("");
-  const [negotiationHistoryData, setNegotiationHistoryData] = useState({});
-  const [negotiationHistoryMessages, setNegotiationHistoryMessages] = useState([]);
-  const [floorPrice, setFloorPrice] = useState("");
-  const [facts, setFacts] = useState("");
-  const [amount, setAmount] = useState("");
-  const [initialEvidence, setInitialEvidence] = useState<File | null>(null);
-  const [initialEvidenceSummary, setInitialEvidenceSummary] = useState("");
-  const [initialEvidenceLoading, setInitialEvidenceLoading] = useState(false);
-  const [initialEvidenceError, setInitialEvidenceError] = useState("");
 
-  const handleEvidenceUpload = async (file: File) => {
-    setLoading(true);
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const res = await fetch("/api/validate-evidence", {
-      method: "POST",
-      body: formData,
+  // Listen to game_state changes
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "cases", caseId), (docSnap) => {
+      const data = docSnap.data();
+      setIsDeadlock(data?.game_state?.status === "deadlock");
     });
 
-    const data = await res.json();
-    setLoading(false);
+    return () => unsub();
+  }, [caseId]);
 
-    return data.summary;
-  };
-
-  const handleSubmit = async () => {
-    setLoading(true);
-
-    let evidenceSummary = "";
-
-    if (initialEvidence) {
-      evidenceSummary = await handleEvidenceUpload(initialEvidence);
-      setInitialEvidenceSummary(evidenceSummary);
+    const handleExport = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/export-pdf?caseId=${caseId}`);
+      if (!res.ok) throw new Error("Failed to fetch court form");
+      const json = await res.json();
+      setPdfData(json); // JSON contains structured court form data
+    } catch (error) {
+      console.error(error);
+      alert("Failed to export small claims form.");
+    } finally {
+      setLoading(false);
     }
-
-    await addDoc(collection(db, "cases"), {
-      role,
-      opponent,
-      facts,
-      dispute_amount: Number(amount),
-      case_variables: {
-        floor_price: Number(floorPrice),
-        evidence_summary: evidenceSummary,
-        settlement_meter: 0.5,
-      },
-      status: "active",
-      created_at: new Date(),
-    });
-
-    setLoading(false);
-
   };
+
+    if (!isDeadlock) return null;
 
   return (
-    <div className="bg-background-light dark:bg-background-dark text-primary dark:text-white transition-colors duration-300 min-h-screen">
-      <div className="h-12 w-full"></div>
-      <div className="flex flex-col min-h-[calc(100vh-3rem)] px-8 max-w-md mx-auto">
+    <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50 p-4">
+      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl">
+        <h1 className="text-3xl font-bold text-red-600 mb-4">
+          Negotiation Failed
+        </h1>
 
-        {/* Header */}
-        <header className="flex items-center gap-4 py-6">
-          <div className="bg-primary dark:bg-white p-2.5 rounded-lg flex items-center justify-center">
-            <span className="material-icons text-white dark:text-black text-2xl">balance</span>
-          </div>
-          <h1 className="font-display text-2xl font-bold tracking-tight">Lex-Machina</h1>
-        </header>
-
-        {/* Main */}
-        <main className="flex-grow flex flex-col items-center justify-center text-center space-y-16 py-12">
-          <h2 className="font-display text-[2.75rem] leading-[1.1] font-black uppercase tracking-tight text-balance">
-            Welcome To<br />Lex-Machina
-          </h2>
-          <input
-            type="number"
-            placeholder="Floor Price (Hidden Limit)"
-            value={floorPrice}
-            onChange={(e) => setFloorPrice(e.target.value)}
-            className="border p-2 rounded w-full"
-          />
-          <input
-            type="file"
-            accept=".pdf,.docx,.txt"
-            onChange={(e) => setInitialEvidence(e.target.files?.[0] || null)}
-            className="border p-2 rounded w-full"
-          />
+        {!pdfData ? (
           <button
-            onClick={handleSubmit}
+            onClick={handleExport}
             disabled={loading}
-            className="bg-primary dark:bg-white text-white dark:text-black w-full py-6 flex items-center justify-center gap-3 transition-transform active:scale-[0.98] group">
-            <span className="font-sans font-medium tracking-widest text-sm uppercase pl-4">
-              {loading ? "Loading..." : "Start Case"}
-            </span>
-            <span className="material-icons text-xl group-hover:translate-x-1 transition-transform">
-              arrow_forward
-            </span>
+            className="px-6 py-3 bg-black text-white rounded"
+          >
+            {loading ? "Generating..." : "Export Small Claims Form"}
           </button>
-        </main>
 
-        {/* Footer */}
-        <footer className="mt-auto pt-8 pb-12 space-y-10">
-          <p className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400 font-sans px-2">
-            Lex-Machina is a pre-court negotiation and settlement support tool — not a replacement for lawyers or judges.
-          </p>
-          <div className="space-y-6">
-            <div className="h-[1px] w-full bg-gray-200 dark:bg-gray-800"></div>
-            <div className="flex flex-col items-center gap-6 text-[12px] font-medium text-gray-400 uppercase tracking-wider">
-              <p>© 2026 Lex-Machina. All rights reserved.</p>
-              <div className="flex gap-8">
-                <a className="hover:text-primary dark:hover:text-white transition-colors" href="#">
-                  Privacy Policy
-                </a>
-                <a className="hover:text-primary dark:hover:text-white transition-colors" href="#">
-                  Terms of Service
-                </a>
+        ) : (
+          <div className="space-y-4">
+            {/* Render clean HTML court form */}
+            <div className="border p-4">
+              <h2 className="text-xl font-bold">Small Claims Form</h2>
+              <p><strong>Case ID:</strong> {caseId}</p>
+              <p><strong>Plaintiff:</strong> {pdfData.plaintiff_name}</p>
+              <p><strong>Defendant:</strong> {pdfData.defendant_name}</p>
+              <p><strong>Claim Amount:</strong> ${pdfData.claim_amount.toFixed(2)}</p>
+              <p><strong>Details:</strong> {pdfData.details}</p>
+            </div>
+
+            <button
+              onClick={() => window.print()}
+              className="px-6 py-3 bg-green-600 text-white rounded"
+            >
+              Print Official Copy
+            </button>
+
+            <div
+              className="fixed inset-0 flex items-center justify-center bg-black/50 z-50 p-4"
+              onClick={() => setPdfData(null)} // or a separate onClose callback
+            >
+              <div
+                className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl"
+                onClick={(e) => e.stopPropagation()} // prevent closing when clicking inside
+              >
+                ...
               </div>
             </div>
           </div>
-        </footer>
+        )}
       </div>
     </div>
   );
