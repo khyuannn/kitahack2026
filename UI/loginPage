@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Lex-Machina | Professional Login</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&amp;family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1A1A1A",
+                        "brand-accent": "#0047AB",
+                        "off-white": "#F9FAFB",
+                    },
+                    fontFamily: {
+                        "sans": ["Inter", "sans-serif"],
+                        "serif": ["Playfair Display", "serif"]
+                    },
+                },
+            },
+        }
+    </script>
+<style type="text/tailwindcss">
+        body {
+            @apply bg-off-white text-primary antialiased;
+        }
+        .login-card {
+            @apply bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100;
+        }
+        input:focus {
+            @apply ring-1 ring-brand-accent border-brand-accent !important;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="min-h-screen flex items-center justify-center p-6">
+<div class="w-full max-w-[440px] flex flex-col items-center">
+<div class="text-center mb-10">
+<div class="inline-flex items-center justify-center w-12 h-12 bg-primary text-white rounded-lg mb-4">
+<span class="material-symbols-outlined text-2xl">balance</span>
+</div>
+<h1 class="text-3xl font-serif tracking-tight text-primary mb-2">Lex-Machina</h1>
+<p class="text-gray-500 text-sm font-medium">Malaysian Settlement Platform</p>
+</div>
+<div class="login-card w-full rounded-2xl p-8 md:p-10">
+<h2 class="text-xl font-semibold mb-8 text-center">Login to your account</h2>
+<button class="w-full flex items-center justify-center gap-3 bg-white border border-gray-200 h-12 rounded-lg hover:bg-gray-50 transition-all duration-200 mb-6">
+<img alt="Google Logo" class="w-5 h-5" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCvGKD4vTWpKGhrarKjro9ngrYIS6MU7giuGRq8rw8Bf4cAP-EKCe_DB72_QEpcZo02hr39y7rHnm9DNdoxwObjOexSpgbLN3mASOnCZfujaZT6BLIJd3UVUOKdFxFQ3NbhRdRXS1aSX3U9uWYgDWEKAndFhi5T3z4cxPhn0bav7CNb98QDgnWm00iDgET09CFNjhevJKgQY9udfnN77rcth7jrGmw21GKsB99giZ_cuzQmUtwf8kUwrNrertn0OmNyaXzTfee3jcw"/>
+<span class="text-sm font-medium text-gray-700">Continue with Google</span>
+</button>
+<div class="relative flex items-center gap-4 mb-6">
+<div class="h-[1px] flex-1 bg-gray-100"></div>
+<span class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">or email</span>
+<div class="h-[1px] flex-1 bg-gray-100"></div>
+</div>
+<form class="space-y-5" onsubmit="return false;">
+<div>
+<label class="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-1.5 ml-0.5">Professional Email</label>
+<input class="w-full bg-off-white border-transparent rounded-lg h-12 px-4 text-sm transition-all outline-none" placeholder="name@firm.com.my" type="email"/>
+</div>
+<div>
+<div class="flex justify-between items-center mb-1.5">
+<label class="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-0.5">Password</label>
+<a class="text-brand-accent text-xs font-semibold hover:text-blue-800 transition-colors" href="#">Forgot?</a>
+</div>
+<div class="relative flex items-center">
+<input class="w-full bg-off-white border-transparent rounded-lg h-12 px-4 text-sm transition-all outline-none pr-12" placeholder="••••••••" type="password"/>
+<button class="absolute right-4 text-gray-400 hover:text-gray-600" type="button">
+<span class="material-symbols-outlined text-xl">visibility</span>
+</button>
+</div>
+</div>
+<button class="w-full bg-primary hover:bg-black text-white font-semibold h-12 rounded-lg transition-all active:scale-[0.98] mt-2 shadow-sm" type="submit">
+                    Sign In
+                </button>
+</form>
+</div>
+<div class="mt-8 text-center">
+<p class="text-sm text-gray-500">
+                New to the platform? 
+                <a class="text-brand-accent font-semibold hover:underline ml-1" href="#">Create an account</a>
+</p>
+<div class="mt-12 flex flex-col items-center gap-3">
+<div class="flex items-center gap-2 opacity-60">
+<span class="material-symbols-outlined text-sm">verified_user</span>
+<span class="text-[10px] uppercase tracking-[0.2em] font-bold">Secure Malaysian Legal Infrastructure</span>
+</div>
+<div class="flex gap-4 text-[10px] text-gray-400 font-medium">
+<a class="hover:text-gray-600 transition-colors" href="#">Privacy Policy</a>
+<a class="hover:text-gray-600 transition-colors" href="#">Terms of Service</a>
+</div>
+</div>
+</div>
+</div>
+
+</body></html>
