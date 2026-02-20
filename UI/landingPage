@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Lex-Machina Landing Page</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&amp;family=Inter:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#000000",
+                        "background-light": "#ffffff",
+                        "background-dark": "#121212",
+                        "text-main-light": "#000000",
+                        "text-main-dark": "#ffffff",
+                        "text-muted-light": "#6b7280",
+                        "text-muted-dark": "#9ca3af",
+                        "border-light": "#e5e7eb",
+                        "border-dark": "#374151",
+                    },
+                    fontFamily: {
+                        serif: ['"Playfair Display"', 'serif'],
+                        sans: ['"Inter"', 'sans-serif'],
+                    },
+                    borderRadius: {
+                        DEFAULT: "0.25rem",
+                    },
+                },
+            },
+        };
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background-light dark:bg-background-dark min-h-screen flex flex-col font-sans antialiased text-text-main-light dark:text-text-main-dark selection:bg-gray-200 dark:selection:bg-gray-700">
+<div class="flex-grow flex flex-col px-6 pt-12 pb-8 max-w-md mx-auto w-full">
+<header class="flex items-center space-x-4 mb-20">
+<div class="bg-primary text-white w-14 h-14 flex items-center justify-center rounded-lg shadow-sm">
+<span class="material-icons-outlined text-3xl">balance</span>
+</div>
+<h1 class="font-serif font-bold text-2xl tracking-tight">Lex-Machina</h1>
+</header>
+<main class="flex-grow flex flex-col items-center justify-center text-center">
+<div class="font-serif font-black text-6xl leading-[1.1] tracking-tight mb-24 text-text-main-light dark:text-text-main-dark">
+<div class="mb-2">WELCOME</div>
+<div class="mb-2">TO</div>
+<div class="mb-2">LEX-</div>
+<div>MACHINA</div>
+</div>
+<button class="bg-primary hover:bg-gray-800 dark:hover:bg-gray-200 dark:text-black text-white w-full py-5 px-8 flex items-center justify-center space-x-3 transition-colors duration-200 group">
+<span class="font-sans font-medium tracking-wide text-sm">START CASE</span>
+<span class="material-icons-outlined text-lg transform group-hover:translate-x-1 transition-transform">arrow_forward</span>
+</button>
+</main>
+<footer class="mt-auto pt-16">
+<p class="text-text-muted-light dark:text-text-muted-dark text-center text-xs leading-relaxed max-w-[300px] mx-auto mb-8 font-light">
+                Lex-Machina is a pre-court negotiation and settlement support tool — not a replacement for lawyers or judges.
+            </p>
+<div class="border-t border-border-light dark:border-border-dark w-full mb-8"></div>
+<div class="flex flex-col items-center space-y-6 text-xs text-text-muted-light dark:text-text-muted-dark font-medium">
+<p>© 2026 Lex-Machina. All rights reserved.</p>
+<div class="flex space-x-8">
+<a class="hover:text-text-main-light dark:hover:text-text-main-dark transition-colors" href="#">Privacy Policy</a>
+<a class="hover:text-text-main-light dark:hover:text-text-main-dark transition-colors" href="#">Terms Of Service</a>
+</div>
+</div>
+</footer>
+</div>
+
+</body></html>
