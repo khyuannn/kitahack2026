@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useEffect } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "@/firebase/config";
@@ -27,10 +29,12 @@ export default function DeadlockScreen({ caseId }: { caseId: string }) {
     const handleExport = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/export-pdf?caseId=${caseId}`);
+      const res = await fetch(`/api/cases/${caseId}/export-pdf`, {
+        method: "POST",
+      });
       if (!res.ok) throw new Error("Failed to fetch court form");
       const json = await res.json();
-      setPdfData(json); // JSON contains structured court form data
+      setPdfData(json);
     } catch (error) {
       console.error(error);
       alert("Failed to export small claims form.");

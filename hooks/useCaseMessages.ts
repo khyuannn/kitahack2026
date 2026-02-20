@@ -1,13 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { db } from "../firebase/config";
 
 export interface CaseMessage {
   id: string;
   role: string;
   content: string;
+  round?: number;
+  counter_offer_rm?: number | null;
+  audio_url?: string | null;
+  auditor_passed?: boolean;
+  auditor_warning?: string | null;
+  createdAt?: any;
 }
 
 export function useCaseMessages(caseId: string) {
@@ -17,11 +23,12 @@ export function useCaseMessages(caseId: string) {
   useEffect(() => {
     if (!caseId) return;
 
-    const fetchMessages = async () => {
-      const snapshot = await getDocs(
-        collection(db, "cases", caseId, "messages")
-      );
+    const q = query(
+      collection(db, "cases", caseId, "messages"),
+      orderBy("createdAt", "asc")
+    );
 
+    const unsub = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
@@ -29,9 +36,9 @@ export function useCaseMessages(caseId: string) {
 
       setMessages(data);
       setLoading(false);
-    };
+    });
 
-    fetchMessages();
+    return () => unsub();
   }, [caseId]);
 
   return { messages, loading };

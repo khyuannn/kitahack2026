@@ -2,7 +2,11 @@ from pydantic import BaseModel, Field
 from typing import Literal, Optional, List
 class StartCaseRequest(BaseModel):
     title: str
-    caseType: Literal["tenancy_deposit"]
+    caseType: Literal["tenancy_deposit", "consumer_ecommerce", "freelance_unpaid"] = "tenancy_deposit"
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    incidentDate: Optional[str] = None
+    floorPrice: Optional[float] = None
 
 class StartCaseResponse(BaseModel):
     caseId: str
@@ -106,7 +110,7 @@ class TurnResponse(BaseModel):
     """
     agent_message: str = Field(..., description="AI opponent's message.")
     #audio playback
-    audio_uri: Optional[str] = Field(default=None, description="firebase strorage URI for TTS audio of agent_message.")
+    audio_url: Optional[str] = Field(default=None, description="firebase storage URI for TTS audio of agent_message.")
     #auditor feedback (M2's validation)
     auditor_warning: Optional[str] = Field(default=None, description="warning message if auditor detects citation issues")
     auditor_passed: bool = Field(default=True, description="whether the passed the auditor check")
@@ -126,8 +130,9 @@ class TurnResponse(BaseModel):
                 }
             }
         )
-game_state:str = Field(..., description="current negaotiation state: 'active', 'settled', 'failed'",
-                       example="active")
+    game_state: str = Field(default="active", description="current negotiation state: 'active', 'settled', 'failed', 'pending_decision', 'deadlock'")
+    counter_offer_rm: Optional[float] = Field(default=None, description="AI's counter offer amount in RM")
+
 #NEW: Evidence Validation (M2's Gemini Vision)
 # -----------------------------------------------------------------------------
 class ValidateEvidenceRequest(BaseModel):

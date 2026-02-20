@@ -1,50 +1,51 @@
-"use client"; // if you have client-side interactions (like the dark mode toggle)
+"use client";
+
+import { useRouter } from "next/navigation";
 
 export default function HomePage() {
+  const router = useRouter();
+
   return (
-    <div className="bg-background-light dark:bg-background-dark text-primary dark:text-white transition-colors duration-300 min-h-screen">
-      <div className="h-12 w-full"></div>
-      <div className="flex flex-col min-h-[calc(100vh-3rem)] px-8 max-w-md mx-auto">
-        //header
-        <header className="flex items-center gap-4 py-6">
-          <div className="bg-primary dark:bg-white p-2.5 rounded-lg flex items-center justify-center">
-            <span className="material-icons text-white dark:text-black text-2xl">balance</span>
+    <div className="bg-white min-h-screen flex flex-col font-sans antialiased text-black selection:bg-gray-200">
+      <div className="flex-grow flex flex-col px-6 pt-12 pb-8 max-w-md mx-auto w-full">
+        {/* Header */}
+        <header className="flex items-center space-x-4 mb-20">
+          <div className="bg-black text-white w-14 h-14 flex items-center justify-center rounded-lg shadow-sm">
+            <span className="material-icons text-3xl">balance</span>
           </div>
-          <h1 className="font-display text-2xl font-bold tracking-tight">Lex-Machina</h1>
+          <h1 className="font-serif font-bold text-2xl tracking-tight">Lex-Machina</h1>
         </header>
 
-        //main
-        <main className="flex-grow flex flex-col items-center justify-center text-center space-y-16 py-12">
-          <h2 className="font-display text-[2.75rem] leading-[1.1] font-black uppercase tracking-tight text-balance">
-            Welcome To<br />Lex-Machina
-          </h2>
-          <button className="bg-primary dark:bg-white text-white dark:text-black w-full py-6 flex items-center justify-center gap-3 transition-transform active:scale-[0.98] group">
-            <span className="font-sans font-medium tracking-widest text-sm uppercase pl-4">
-              Start Case
-            </span>
-            <span className="material-icons text-xl group-hover:translate-x-1 transition-transform">
+        {/* Main */}
+        <main className="flex-grow flex flex-col items-center justify-center text-center">
+          <div className="font-serif font-black text-6xl leading-[1.1] tracking-tight mb-24">
+            <div className="mb-2">WELCOME</div>
+            <div className="mb-2">TO</div>
+            <div className="mb-2">LEX-</div>
+            <div>MACHINA</div>
+          </div>
+          <button
+            onClick={() => router.push("/login")}
+            className="bg-black hover:bg-gray-800 text-white w-full py-5 px-8 flex items-center justify-center space-x-3 transition-colors duration-200 group"
+          >
+            <span className="font-sans font-medium tracking-wide text-sm">START CASE</span>
+            <span className="material-icons text-lg transform group-hover:translate-x-1 transition-transform">
               arrow_forward
             </span>
           </button>
         </main>
 
-        //footer
-        <footer className="mt-auto pt-8 pb-12 space-y-10">
-          <p className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400 font-sans px-2">
+        {/* Footer */}
+        <footer className="mt-auto pt-16">
+          <p className="text-gray-500 text-center text-xs leading-relaxed max-w-[300px] mx-auto mb-8 font-light">
             Lex-Machina is a pre-court negotiation and settlement support tool — not a replacement for lawyers or judges.
           </p>
-          <div className="space-y-6">
-            <div className="h-[1px] w-full bg-gray-200 dark:bg-gray-800"></div>
-            <div className="flex flex-col items-center gap-6 text-[12px] font-medium text-gray-400 uppercase tracking-wider">
-              <p>© 2026 Lex-Machina. All rights reserved.</p>
-              <div className="flex gap-8">
-                <a className="hover:text-primary dark:hover:text-white transition-colors" href="#">
-                  Privacy Policy
-                </a>
-                <a className="hover:text-primary dark:hover:text-white transition-colors" href="#">
-                  Terms of Service
-                </a>
-              </div>
+          <div className="border-t border-gray-200 w-full mb-8"></div>
+          <div className="flex flex-col items-center space-y-6 text-xs text-gray-400 font-medium">
+            <p>© 2026 Lex-Machina. All rights reserved.</p>
+            <div className="flex space-x-8">
+              <a className="hover:text-black transition-colors" href="#">Privacy Policy</a>
+              <a className="hover:text-black transition-colors" href="#">Terms Of Service</a>
             </div>
           </div>
         </footer>

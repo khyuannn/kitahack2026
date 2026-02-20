@@ -142,20 +142,19 @@ async def start_case(request: StartCaseRequest) -> StartCaseResponse:
     Create a new case.
     phase1: write to firestore and return caseId
     """
-    # TODO: orchestrator.create_case(title=request.title, case_type=request.caseType)
     case_id = str(uuid.uuid4())
     if db:
         db.collection("cases").document(case_id).set({
             "status": "created",
             "title": request.title,
             "caseType": request.caseType,
+            "description": request.description or "",
+            "amount": request.amount or 0,
+            "incidentDate": request.incidentDate or "",
+            "floorPrice": request.floorPrice or 0,
             "createdAt": firestore.SERVER_TIMESTAMP,
-            "createdBy": "mock-user-id",  # To be replaced with actual user ID
-
+            "createdBy": "mock-user-id",
         })
-        # Return the document ID as caseId
-    # phase 2
-    # orchestrator.create_case(title=request.title, case_type=request.caseType, case_id=case_id)
     return StartCaseResponse(caseId=case_id)
 
 
@@ -367,6 +366,71 @@ async def validate_evidence_endpoint(
             status_code=500,
             detail=f"Evidence validation failed: {str(e)}"
         )
+
+
+@app.post(
+    "/api/cases/{caseId}/upload-evidence",
+    status_code=200,
+)
+async def upload_evidence_file(
+    caseId: str,
+    file: UploadFile = File(...),
+    user_claim: str = "",
+):
+    """
+    Upload evidence file directly (multipart/form-data).
+    Saves to a temp file, uploads to Gemini File API, returns URI.
+    """
+    import tempfile
+    from backend.logic.evidence import (
+        _upload_to_gemini_file_api,
+        _is_supported_mime_type,
+        _normalize_mime_type,
+        MAX_BYTES,
+    )
+    from google import genai
+
+    # Validate case
+    if db:
+        case_ref = db.collection("cases").document(caseId)
+        if not case_ref.get().exists:
+            raise HTTPException(status_code=404, detail="Case not found")
+
+    # Read file bytes
+    file_bytes = await file.read()
+    if len(file_bytes) > MAX_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds 5MB limit")
+
+    mime_type = _normalize_mime_type(file.content_type or "application/octet-stream")
+    if not _is_supported_mime_type(mime_type):
+        raise HTTPException(
+            status_code=400,
+            detail="Only images (JPG/PNG) and PDF files are supported",
+        )
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Missing GEMINI_API_KEY")
+
+    client = genai.Client(api_key=api_key)
+    try:
+        file_uri = _upload_to_gemini_file_api(
+            client, file.filename or "upload", file_bytes, mime_type
+        )
+        return {
+            "is_relevant": True,
+            "file_uri": file_uri,
+            "mime_type": mime_type,
+            "confidence_score": 1.0,
+            "summary_for_agent": user_claim or f"Evidence: {file.filename}",
+        }
+    except Exception as e:
+        print(f"❌ Evidence upload error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Evidence upload failed: {str(e)}",
+        )
+
 
 #this repeat with upside, but incase retain it for checking
 # @app.post(
