@@ -109,7 +109,7 @@ export default function VerificationPage() {
 
   return (
     <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 flex justify-center">
-      <div className="w-full max-w-md bg-white min-h-screen shadow-2xl relative flex flex-col">
+      <div className="w-full max-w-md md:max-w-2xl lg:max-w-3xl bg-white min-h-screen shadow-2xl relative flex flex-col">
         {/* Header */}
         <header className="px-6 py-5 border-b border-gray-200 flex items-center gap-4 bg-white sticky top-0 z-10">
           <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center shrink-0">

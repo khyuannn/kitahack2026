@@ -28,15 +28,22 @@ export function useCaseMessages(caseId: string) {
       orderBy("createdAt", "asc")
     );
 
-    const unsub = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as CaseMessage[];
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const data = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as CaseMessage[];
 
-      setMessages(data);
-      setLoading(false);
-    });
+        setMessages(data);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Failed to subscribe case messages:", error);
+        setLoading(false);
+      }
+    );
 
     return () => unsub();
   }, [caseId]);

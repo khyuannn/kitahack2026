@@ -19,6 +19,7 @@ export default function EvidenceModal({
   const [userClaim, setUserClaim] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   if (!isOpen) return null;
 
@@ -61,16 +62,29 @@ export default function EvidenceModal({
         body: formData,
       });
 
-      const data = await res.json();
+      // Read as text first to avoid JSON parse errors on non-JSON responses
+      const text = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        if (!res.ok) throw new Error(text || `Upload failed (HTTP ${res.status})`);
+        throw new Error("Unexpected response from server");
+      }
 
       if (!res.ok) {
         throw new Error(data.detail || "Validation failed");
       }
 
       onValidated(data.file_uri, file.name, file.type);
-      setFile(null);
-      setUserClaim("");
-      onClose();
+      setSuccess(true);
+      // Show success for 1.5s then close
+      setTimeout(() => {
+        setFile(null);
+        setUserClaim("");
+        setSuccess(false);
+        onClose();
+      }, 1500);
 
     } catch (err: any) {
       setError(err.message);
@@ -103,6 +117,13 @@ export default function EvidenceModal({
 
         {error && (
           <p className="text-red-500 text-sm mb-2">{error}</p>
+        )}
+
+        {success && (
+          <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mb-2">
+            <span className="material-icons text-green-600" style={{ fontSize: 18 }}>check_circle</span>
+            <p className="text-green-700 text-sm font-medium">Evidence uploaded successfully!</p>
+          </div>
         )}
 
         <div className="flex justify-end gap-3 mt-4">

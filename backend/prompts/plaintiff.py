@@ -37,34 +37,41 @@ Round: {current_round} of 4
         round_directive = """
 GOAL (Opening):
 - Acknowledge the dispute.
-- Present initial legal position.
-- Mention evidence immediately.
-- Do NOT make final offer.
+- Present initial legal position firmly.
+- Reference available evidence immediately to establish credibility.
+- Set the tone: you expect full recovery of the disputed amount.
+- Do NOT make final offer yet.
 """
     elif current_round == 2:
         round_directive = """
 GOAL (Attack):
-- Attack the opponent’s argument.
-- Rely heavily on citing specific laws.
-- Reinforce evidence strength.
+- Systematically challenge the opponent's arguments point by point.
+- Cite ONE specific law section per argument (use full formal name + year).
+- Highlight weaknesses in the opponent's evidence or lack thereof.
+- Reinforce your evidence strength.
+- Make a firm counter-offer that is assertive but not your floor.
 """
     elif current_round == 3:
-        round_directive = """
-GOAL (Negotiation):
-- Move toward compromise but remain firm.
+        round_directive = f"""
+GOAL (Negotiation - Post-Mediation):
+- Acknowledge the mediator's guidance where it supports your position.
+- Move toward compromise but remain firm on key points.
 - Provide counter-offer above RM {floor_price}.
+- Explain WHY your offer is reasonable using evidence and law.
 """
     else:
         round_directive = f"""
 GOAL (Final Proposal):
 - Make take-it-or-leave-it offer.
 - Never settle below RM {floor_price}.
+- Summarize your strongest legal and evidence-based arguments.
+- Make clear this is your final position.
 """
 
     output_format = """
 [OUTPUT - ONLY VALID JSON]
 {
-  "message": "Your conversational response under 100 words.",
+  "message": "Your conversational response. Be concise but thorough (under 150 words).",
   "counter_offer_rm": number
 }
 """

@@ -6,12 +6,13 @@ phase 2: turn-based negotiation with RAG, auditor, and TTS
 """
 import os
 import json
+import queue
+import time
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, status, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
@@ -259,9 +260,9 @@ async def get_case_result(caseId: str) -> GetCaseResultResponse:
         status="running",
         settlement=None,
     )
-@app.post("/api/cases/{caseId}/next-turn", response_model=TurnResponse)
-async def next_turn(caseId: str,request: TurnRequest) -> TurnResponse:
-    """Phase 2: Handle one negotiation turn."""
+@app.post("/api/cases/{caseId}/next-turn")
+async def next_turn(caseId: str, request: TurnRequest):
+    """Phase 2: Handle one negotiation turn with streaming progress."""
     
     # Import the new function
     from backend.core.orchestrator import run_negotiation_turn
@@ -274,34 +275,106 @@ async def next_turn(caseId: str,request: TurnRequest) -> TurnResponse:
         if not case_doc.exists:
             raise HTTPException(status_code=404, detail="Case not found")
         
-        if case_doc.to_dict().get("status") == "done":
+        case_status = case_doc.to_dict().get("status", "")
+        # Only block truly final states, not active negotiation cases
+        if case_status == "done" and case_doc.to_dict().get("game_state") in ("settled", "deadlock"):
             raise HTTPException(status_code=400, detail="Case already completed")
     
-    try:
-        # Call the orchestrator
-        result = run_negotiation_turn(
-            case_id=caseId,
-            user_message=request.user_message,
-            current_round=request.current_round,
-            user_role="plaintiff",  # User plays as plaintiff
-            evidence_uris=request.evidence_uris,
-            floor_price=request.floor_price,
-        )
-        
-        # Map to TurnResponse
-        return TurnResponse(
-            agent_message=result["agent_message"],
-            audio_url=result["audio_url"],
-            auditor_passed=result["auditor_passed"],
-            auditor_warning=result["auditor_warning"],
-            chips=result["chips"],
-            game_state=result["game_state"],
-            counter_offer_rm=result["counter_offer_rm"],
-        )
+    # Use streaming NDJSON to keep connection alive and show progress
+    progress_queue = queue.Queue()
+    result_holder = [None]
+    error_holder = [None]
     
-    except Exception as e:
-        print(f"❌ Turn error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    def progress_callback(step, message):
+        progress_queue.put(json.dumps({"type": "progress", "step": step, "message": message}) + "\n")
+    
+    def run_in_thread():
+        try:
+            result = run_negotiation_turn(
+                case_id=caseId,
+                user_message=request.user_message,
+                user_role="plaintiff",
+                evidence_uris=request.evidence_uris,
+                floor_price=request.floor_price,
+                progress_callback=progress_callback,
+            )
+            result_holder[0] = result
+        except Exception as e:
+            print(f"❌ Turn thread error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            error_holder[0] = str(e)
+        finally:
+            progress_queue.put(None)  # Sentinel to end stream
+    
+    import threading
+    thread = threading.Thread(target=run_in_thread, daemon=True)
+    thread.start()
+    request_started_at = time.monotonic()
+    hard_timeout_sec = 210
+    heartbeat_interval_sec = 8
+    
+    def event_generator():
+        last_heartbeat_at = 0.0
+        while True:
+            elapsed = time.monotonic() - request_started_at
+            if elapsed > hard_timeout_sec and thread.is_alive():
+                error_holder[0] = f"Turn timed out after {hard_timeout_sec}s. Please retry."
+                progress_queue.put(None)
+
+            try:
+                item = progress_queue.get(timeout=2)
+                if item is None:
+                    break
+                yield item
+            except queue.Empty:
+                if thread.is_alive():
+                    now = time.monotonic()
+                    if now - last_heartbeat_at >= heartbeat_interval_sec:
+                        elapsed_int = int(now - request_started_at)
+                        mins = elapsed_int // 60
+                        secs = elapsed_int % 60
+                        yield json.dumps({
+                            "type": "progress",
+                            "step": "heartbeat",
+                            "message": f"Still processing... ({mins}:{secs:02d})"
+                        }) + "\n"
+                        last_heartbeat_at = now
+                    continue
+                break
+        
+        # Send final result or error
+        if error_holder[0]:
+            yield json.dumps({"type": "error", "message": error_holder[0]}) + "\n"
+        elif result_holder[0]:
+            r = result_holder[0]
+            # Sanitize chips for JSON serialization
+            chips_data = r.get("chips")
+            if chips_data and isinstance(chips_data, dict):
+                chips_data = {
+                    "question": chips_data.get("question", ""),
+                    "options": chips_data.get("options", [])
+                }
+            
+            yield json.dumps({"type": "result", "data": {
+                "agent_message": r.get("agent_message", ""),
+                "plaintiff_message": r.get("plaintiff_message"),
+                "current_round": r.get("current_round", 1),
+                "audio_url": r.get("audio_url"),
+                "auditor_passed": r.get("auditor_passed", True),
+                "auditor_warning": r.get("auditor_warning"),
+                "chips": chips_data,
+                "game_state": r.get("game_state", "active"),
+                "counter_offer_rm": r.get("counter_offer_rm"),
+            }}) + "\n"
+        else:
+            yield json.dumps({"type": "error", "message": "No result returned"}) + "\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 @app.get("/health")
 async def health_check():
@@ -417,6 +490,18 @@ async def upload_evidence_file(
         file_uri = _upload_to_gemini_file_api(
             client, file.filename or "upload", file_bytes, mime_type
         )
+
+        if db:
+            case_ref = db.collection("cases").document(caseId)
+            case_ref.collection("evidence").add({
+                "fileType": mime_type,
+                "storageUrl": file_uri,
+                "fileName": file.filename or "upload",
+                "extractedText": user_claim or f"Evidence file uploaded: {file.filename or 'upload'}",
+                "file_uri": file_uri,
+                "createdAt": firestore.SERVER_TIMESTAMP,
+            })
+
         return {
             "is_relevant": True,
             "file_uri": file_uri,
@@ -430,6 +515,144 @@ async def upload_evidence_file(
             status_code=500,
             detail=f"Evidence upload failed: {str(e)}",
         )
+
+
+# ---- Auditor retry & dismiss endpoints ----
+
+@app.post("/api/cases/{caseId}/messages/{messageId}/audit-retry")
+async def audit_retry(caseId: str, messageId: str):
+    """Regenerate a failed agent message with safer citations, then re-audit and update Firestore."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    case_ref = db.collection("cases").document(caseId)
+    msg_ref = db.collection("cases").document(caseId).collection("messages").document(messageId)
+    msg_doc = msg_ref.get()
+    if not msg_doc.exists:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    msg_data = msg_doc.to_dict()
+    role = msg_data.get("role")
+    if role not in ["defendant", "plaintiff"]:
+        raise HTTPException(status_code=400, detail="Only agent messages can be audited")
+
+    original_content = msg_data.get("content", "")
+    current_round = int(msg_data.get("round") or 1)
+
+    # Build case + evidence context
+    case_data = case_ref.get().to_dict() or {}
+    case_title = case_data.get("title", "Dispute")
+    case_type = case_data.get("caseType", "tenancy_deposit")
+    claim_amount = case_data.get("amount", 0) or 0
+    floor_price = int(case_data.get("floorPrice", 0) or 0)
+    defendant_max_offer = int(claim_amount * 0.5) if claim_amount > 0 else floor_price
+
+    evidence_docs = case_ref.collection("evidence").stream()
+    evidence_texts = []
+    for edoc in evidence_docs:
+        extracted = (edoc.to_dict() or {}).get("extractedText")
+        if extracted:
+            evidence_texts.append(str(extracted)[:600])
+    evidence_summary = "\n".join(evidence_texts[:8]) if evidence_texts else "No evidence provided."
+
+    # Pull minimal legal context from indexed DB to guide rewrite
+    from backend.rag.retrieval import retrieve_law
+    retrieval_query = f"{case_type} {case_title} {original_content[:300]}"
+    legal_docs = retrieve_law(retrieval_query, use_agentic=False)
+    legal_context = "\n".join([
+        f"- {d.get('law', 'Unknown')} Section {d.get('section', '?')}: {str(d.get('excerpt', ''))[:220]}"
+        for d in legal_docs[:5]
+    ]) or "No specific laws retrieved."
+
+    case_data_dict = {
+        "case_title": case_title,
+        "case_type": case_type,
+        "case_facts": f"Case Type: {case_type}\nTitle: {case_title}",
+        "evidence_summary": evidence_summary,
+        "floor_price": floor_price,
+        "dispute_amount": claim_amount,
+        "defendant_max_offer": defendant_max_offer,
+        "legal_context": legal_context,
+    }
+
+    # Build role-specific rewrite prompt
+    if role == "plaintiff":
+        base_prompt = build_plaintiff_prompt(case_data=case_data_dict, current_round=current_round)
+    else:
+        base_prompt = build_defendant_prompt(case_data=case_data_dict, current_round=current_round)
+
+    rewrite_prompt = f"""{base_prompt}
+
+You are revising a previously failed response after an auditor intercept.
+Previous response:
+\"\"\"
+{original_content}
+\"\"\"
+
+Rules for this retry:
+1) Keep the same negotiation stance and intent.
+2) Remove or replace any law citation not supported by the provided Legal Context.
+3) If unsure about a section, avoid specific section numbers and rely on evidence-based reasoning.
+4) Output ONLY valid JSON in the required schema.
+"""
+
+    # Regenerate and parse
+    regenerated_text = original_content
+    regenerated_offer = msg_data.get("counter_offer_rm")
+    try:
+        raw = call_gemini_with_retry(rewrite_prompt, max_retries=2, per_call_timeout=25)
+        cleaned = raw.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+        elif cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
+        try:
+            parsed = json.loads(cleaned)
+            regenerated_text = parsed.get("message", cleaned)
+            if parsed.get("counter_offer_rm") is not None:
+                regenerated_offer = parsed.get("counter_offer_rm")
+        except json.JSONDecodeError:
+            regenerated_text = raw
+    except Exception as e:
+        # Keep previous text if regeneration fails; return fresh audit result for visibility
+        print(f"⚠️ Audit retry regeneration failed for {messageId}: {e}")
+
+    result = validate_turn(regenerated_text)
+
+    msg_ref.update({
+        "content": regenerated_text,
+        "counter_offer_rm": regenerated_offer,
+        "auditor_passed": result["is_valid"],
+        "auditor_warning": result.get("auditor_warning") if not result["is_valid"] else None,
+        "auditor_retry_count": int(msg_data.get("auditor_retry_count", 0) or 0) + 1,
+        "auditor_retried_at": firestore.SERVER_TIMESTAMP,
+    })
+
+    return {
+        "is_valid": result["is_valid"],
+        "auditor_warning": result.get("auditor_warning"),
+        "updated": True,
+    }
+
+
+@app.patch("/api/cases/{caseId}/messages/{messageId}/audit-dismiss")
+async def audit_dismiss(caseId: str, messageId: str):
+    """Mark a failed audit as dismissed (proceed anyway)."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    msg_ref = db.collection("cases").document(caseId).collection("messages").document(messageId)
+    msg_doc = msg_ref.get()
+    if not msg_doc.exists:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    msg_ref.update({
+        "auditor_passed": True,
+        "auditor_warning": None,
+    })
+
+    return {"status": "dismissed"}
 
 
 #this repeat with upside, but incase retain it for checking

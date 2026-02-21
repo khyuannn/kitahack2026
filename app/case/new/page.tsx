@@ -63,7 +63,7 @@ export default function SelectDisputeTypePage() {
     <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-12">
       {/* Header */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
-        <div className="max-w-md mx-auto px-6 py-4 flex items-center gap-4">
+        <div className="max-w-md md:max-w-2xl lg:max-w-4xl mx-auto px-6 py-4 flex items-center gap-4">
           <div className="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
             <span className="material-icons-round text-white text-2xl">balance</span>
           </div>
@@ -71,7 +71,7 @@ export default function SelectDisputeTypePage() {
         </div>
       </header>
 
-      <main className="max-w-md mx-auto px-6 py-8">
+      <main className="max-w-md md:max-w-2xl lg:max-w-4xl mx-auto px-6 py-8">
         {/* Step indicator */}
         <div className="flex items-center gap-2 mb-4">
           <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded">Step 1</span>
@@ -84,7 +84,7 @@ export default function SelectDisputeTypePage() {
         </p>
 
         {/* Dispute Type Cards */}
-        <div className="space-y-4">
+        <div className="space-y-4 md:grid md:grid-cols-2 md:gap-4 md:space-y-0">
           {disputeTypes.map((type) => (
             <div
               key={type.id}

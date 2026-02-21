@@ -20,7 +20,7 @@ if GEMINI_API_KEY:
 # Standard embedding model
 EMBEDDING_MODEL = "models/gemini-embedding-001" 
 # Use env-configurable generation model for reasoning
-GENERATION_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
+GENERATION_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
 def call_gemini_with_backoff(prompt: str) -> str:
     """
@@ -35,24 +35,24 @@ def call_gemini_with_backoff(prompt: str) -> str:
         "contents": [{"parts": [{"text": prompt}]}]
     }
     
-    max_retries = 5
+    max_retries = 3
     for i in range(max_retries):
         try:
-            response = requests.post(url, json=payload, timeout=30)
+            response = requests.post(url, json=payload, timeout=10)
             if response.status_code == 200:
                 result = response.json()
                 return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "")
             elif response.status_code == 429:
-                wait_time = 2 ** i
-                print(f"⚠️ Quota hit. Retrying in {wait_time}s...")
+                wait_time = min(2 ** i, 4)
+                print(f"\u26a0\ufe0f Quota hit. Retrying in {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             else:
-                print(f"❌ API Error: {response.text}")
+                print(f"\u274c API Error: {response.text}")
                 break
         except Exception as e:
-            print(f"❌ Network Error: {e}")
-            time.sleep(2 ** i)
+            print(f"\u274c Network Error: {e}")
+            time.sleep(min(2 ** i, 4))
             
     return ""
 
@@ -123,7 +123,8 @@ def retrieve_law(
             if generated_queries:
                 search_queries = generated_queries
             else:
-                print("⚠️ Agentic query generation unavailable. Falling back to user query.")
+                print("⚠️ Agentic query generation returned empty. Falling back to direct query.")
+                search_queries = [query]
 
         all_matches = []
         seen_ids = set()

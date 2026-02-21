@@ -7,7 +7,7 @@ export default function HomePage() {
 
   return (
     <div className="bg-white min-h-screen flex flex-col font-sans antialiased text-black selection:bg-gray-200">
-      <div className="flex-grow flex flex-col px-6 pt-12 pb-8 max-w-md mx-auto w-full">
+      <div className="flex-grow flex flex-col px-6 pt-12 pb-8 max-w-md md:max-w-2xl lg:max-w-4xl mx-auto w-full">
         {/* Header */}
         <header className="flex items-center space-x-4 mb-20">
           <div className="bg-black text-white w-14 h-14 flex items-center justify-center rounded-lg shadow-sm">

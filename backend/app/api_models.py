@@ -94,11 +94,10 @@ class ChipOptions(BaseModel):
 class TurnRequest(BaseModel):
     """
     Request model for /next-turn endpoint.
-    Handles user input and evidence injection during negotiation.
+    Handles user strategic directive and evidence injection during negotiation.
     """
     caseId: str = Field(..., description="case ID from phase1.")
-    user_message: str = Field(..., description="User's message for this turn.")
-    current_round: int = Field(..., description="Current round number.")
+    user_message: str = Field(default="", description="Optional strategic directive to guide the plaintiff AI agent.")
     evidence_uris: Optional[list[str]] = Field(default=[], description="Array of Gemini File API URIs for newly uploaded evidence.")
     # user's floor price (hidden from opponent, used for negotiation strategy)
     floor_price: Optional[float] = Field(default=None, description="User's minimum acceptable settlement amount in RM")
@@ -108,7 +107,9 @@ class TurnResponse(BaseModel):
     Response model for /next-turn endpoint.
     Contains AI response, audio, auditor feedback, and strategic chips.
     """
-    agent_message: str = Field(..., description="AI opponent's message.")
+    agent_message: str = Field(..., description="AI defendant's (opponent) message.")
+    plaintiff_message: Optional[str] = Field(default=None, description="AI plaintiff's (your agent) message.")
+    current_round: int = Field(default=1, description="Authoritative round number from backend.")
     #audio playback
     audio_url: Optional[str] = Field(default=None, description="firebase storage URI for TTS audio of agent_message.")
     #auditor feedback (M2's validation)
