@@ -16,12 +16,16 @@ export interface CaseMessage {
   createdAt?: any;
 }
 
-export function useCaseMessages(caseId: string) {
+export function useCaseMessages(caseId: string, enabled: boolean = true) {
   const [messages, setMessages] = useState<CaseMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
-    if (!caseId) return;
+    if (!caseId || !enabled) {
+      setLoading(!enabled ? true : false);
+      return;
+    }
 
     const q = query(
       collection(db, "cases", caseId, "messages"),
@@ -38,15 +42,21 @@ export function useCaseMessages(caseId: string) {
 
         setMessages(data);
         setLoading(false);
+        if (retryCount > 0) setRetryCount(0);
       },
       (error) => {
         console.error("Failed to subscribe case messages:", error);
-        setLoading(false);
+        if (retryCount < 3) {
+          console.warn(`Retrying case messages subscription (attempt ${retryCount + 1}/3)...`);
+          setTimeout(() => setRetryCount((r) => r + 1), 2000 * (retryCount + 1));
+        } else {
+          setLoading(false);
+        }
       }
     );
 
     return () => unsub();
-  }, [caseId]);
+  }, [caseId, enabled, retryCount]);
 
   return { messages, loading };
 }

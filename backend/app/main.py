@@ -44,6 +44,9 @@ from backend.app.api_models import (
     ChipOptions,
     CourtFilingRequest,
     CourtFilingResponse,
+    PvpTurnRequest,
+    JoinCaseRequest,
+    UpdateParticipantRequest,
 )
 
 load_dotenv()
@@ -145,7 +148,7 @@ async def start_case(request: StartCaseRequest) -> StartCaseResponse:
     """
     case_id = str(uuid.uuid4())
     if db:
-        db.collection("cases").document(case_id).set({
+        case_doc = {
             "status": "created",
             "title": request.title,
             "caseType": request.caseType,
@@ -154,8 +157,24 @@ async def start_case(request: StartCaseRequest) -> StartCaseResponse:
             "incidentDate": request.incidentDate or "",
             "floorPrice": request.floorPrice or 0,
             "createdAt": firestore.SERVER_TIMESTAMP,
-            "createdBy": "mock-user-id",
-        })
+            "createdBy": request.createdBy or "mock-user-id",
+            "mode": request.mode,  # "ai" or "pvp"
+        }
+        # For PvP mode, add participant tracking and turn management
+        if request.mode == "pvp":
+            case_doc.update({
+                "plaintiffUserId": request.createdBy or "mock-user-id",
+                "defendantUserId": None,
+                "plaintiffDisplayName": None,
+                "defendantDisplayName": None,
+                "defendantIsAnonymous": None,
+                "currentTurn": "plaintiff",
+                "turnStatus": "waiting",
+                "pvpRound": 1,
+                "plaintiffSubmitted": False,
+                "defendantSubmitted": False,
+            })
+        db.collection("cases").document(case_id).set(case_doc)
     return StartCaseResponse(caseId=case_id)
 
 
@@ -380,6 +399,242 @@ async def next_turn(caseId: str, request: TurnRequest):
 async def health_check():
     """Health check endpoint."""
     return {"status": "ok", "firebase": db is not None}
+
+
+# =============================================================================
+# PvP Invite System Endpoints
+# =============================================================================
+
+@app.post("/api/cases/{caseId}/join")
+async def join_case(caseId: str, request: JoinCaseRequest):
+    """
+    Defendant joins a PvP case via invite link.
+    Validates case is PvP mode and defendant slot is empty.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+
+    if case_data.get("mode") != "pvp":
+        raise HTTPException(status_code=400, detail="This case is not a PvP negotiation")
+
+    # Check if defendant already joined
+    existing_defendant = case_data.get("defendantUserId")
+    if existing_defendant and existing_defendant != request.userId:
+        raise HTTPException(status_code=400, detail="Another defendant has already joined this case")
+
+    # Check plaintiff isn't joining as defendant
+    if case_data.get("plaintiffUserId") == request.userId:
+        raise HTTPException(status_code=400, detail="You cannot join your own case as defendant")
+
+    # Assign defendant
+    case_ref.update({
+        "defendantUserId": request.userId,
+        "defendantIsAnonymous": request.isAnonymous,
+        "defendantDisplayName": request.displayName,
+    })
+
+    # Add system message
+    case_ref.collection("messages").add({
+        "role": "system",
+        "content": f"Defendant has joined the negotiation.{' (' + request.displayName + ')' if request.displayName else ''}",
+        "round": 0,
+        "createdAt": firestore.SERVER_TIMESTAMP,
+    })
+
+    return {
+        "status": "joined",
+        "caseId": caseId,
+        "role": "defendant",
+        "title": case_data.get("title"),
+        "caseType": case_data.get("caseType"),
+        "amount": case_data.get("amount"),
+    }
+
+
+@app.patch("/api/cases/{caseId}/update-participant")
+async def update_participant(caseId: str, request: UpdateParticipantRequest):
+    """
+    Update participant UID after anonymous-to-Google auth upgrade.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+
+    if request.role == "plaintiff":
+        if case_data.get("plaintiffUserId") != request.oldUserId:
+            raise HTTPException(status_code=403, detail="Old UID does not match plaintiff")
+        case_ref.update({
+            "plaintiffUserId": request.newUserId,
+            "plaintiffDisplayName": request.displayName,
+            "createdBy": request.newUserId,
+        })
+    elif request.role == "defendant":
+        if case_data.get("defendantUserId") != request.oldUserId:
+            raise HTTPException(status_code=403, detail="Old UID does not match defendant")
+        case_ref.update({
+            "defendantUserId": request.newUserId,
+            "defendantDisplayName": request.displayName,
+            "defendantIsAnonymous": False,
+        })
+
+    return {"status": "updated", "role": request.role}
+
+
+@app.post("/api/cases/{caseId}/pvp-turn")
+async def pvp_turn(caseId: str, request: PvpTurnRequest):
+    """
+    PvP: Handle one side's turn.
+    Only the user whose turn it is can submit.
+    Runs only the AI agent for that user's role, then flips the turn.
+    """
+    from backend.core.orchestrator import run_pvp_negotiation_turn
+
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+
+    if case_data.get("mode") != "pvp":
+        raise HTTPException(status_code=400, detail="This case is not PvP mode")
+
+    # Validate it's this user's turn
+    current_turn = case_data.get("currentTurn", "plaintiff")
+    if current_turn != request.user_role:
+        raise HTTPException(
+            status_code=400,
+            detail=f"It's not your turn. Current turn: {current_turn}"
+        )
+
+    # Validate the user is actually the correct participant
+    if request.user_role == "plaintiff":
+        if request.userId and case_data.get("plaintiffUserId") and request.userId != case_data.get("plaintiffUserId"):
+            raise HTTPException(status_code=403, detail="You are not the plaintiff for this case")
+    elif request.user_role == "defendant":
+        if request.userId and case_data.get("defendantUserId") and request.userId != case_data.get("defendantUserId"):
+            raise HTTPException(status_code=403, detail="You are not the defendant for this case")
+
+    # Check defendant has joined
+    if not case_data.get("defendantUserId"):
+        raise HTTPException(status_code=400, detail="Waiting for defendant to join")
+
+    case_status = case_data.get("status", "")
+    if case_status == "done" and case_data.get("game_state") in ("settled", "deadlock"):
+        raise HTTPException(status_code=400, detail="Case already completed")
+
+    # Use streaming NDJSON (same pattern as AI mode)
+    progress_queue = queue.Queue()
+    result_holder = [None]
+    error_holder = [None]
+
+    def progress_callback(step, message):
+        progress_queue.put(json.dumps({"type": "progress", "step": step, "message": message}) + "\n")
+
+    def run_in_thread():
+        try:
+            result = run_pvp_negotiation_turn(
+                case_id=caseId,
+                user_message=request.user_message,
+                user_role=request.user_role,
+                evidence_uris=request.evidence_uris,
+                floor_price=request.floor_price,
+                progress_callback=progress_callback,
+            )
+            result_holder[0] = result
+        except Exception as e:
+            print(f"❌ PvP turn thread error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            error_holder[0] = str(e)
+        finally:
+            progress_queue.put(None)
+
+    thread = threading.Thread(target=run_in_thread, daemon=True)
+    thread.start()
+    request_started_at = time.monotonic()
+    hard_timeout_sec = 210
+    heartbeat_interval_sec = 8
+
+    def event_generator():
+        last_heartbeat_at = 0.0
+        while True:
+            elapsed = time.monotonic() - request_started_at
+            if elapsed > hard_timeout_sec and thread.is_alive():
+                error_holder[0] = f"Turn timed out after {hard_timeout_sec}s. Please retry."
+                progress_queue.put(None)
+
+            try:
+                item = progress_queue.get(timeout=2)
+                if item is None:
+                    break
+                yield item
+            except queue.Empty:
+                if thread.is_alive():
+                    now = time.monotonic()
+                    if now - last_heartbeat_at >= heartbeat_interval_sec:
+                        elapsed_int = int(now - request_started_at)
+                        mins = elapsed_int // 60
+                        secs = elapsed_int % 60
+                        yield json.dumps({
+                            "type": "progress",
+                            "step": "heartbeat",
+                            "message": f"Still processing... ({mins}:{secs:02d})"
+                        }) + "\n"
+                        last_heartbeat_at = now
+                    continue
+                break
+
+        if error_holder[0]:
+            yield json.dumps({"type": "error", "message": error_holder[0]}) + "\n"
+        elif result_holder[0]:
+            r = result_holder[0]
+            chips_data = r.get("chips")
+            if chips_data and isinstance(chips_data, dict):
+                chips_data = {
+                    "question": chips_data.get("question", ""),
+                    "options": chips_data.get("options", [])
+                }
+
+            yield json.dumps({"type": "result", "data": {
+                "agent_message": r.get("agent_message", ""),
+                "plaintiff_message": r.get("plaintiff_message"),
+                "current_round": r.get("current_round", 1),
+                "audio_url": r.get("audio_url"),
+                "auditor_passed": r.get("auditor_passed", True),
+                "auditor_warning": r.get("auditor_warning"),
+                "chips": chips_data,
+                "game_state": r.get("game_state", "active"),
+                "counter_offer_rm": r.get("counter_offer_rm"),
+                "current_turn": r.get("current_turn", "plaintiff"),
+            }}) + "\n"
+        else:
+            yield json.dumps({"type": "error", "message": "No result returned"}) + "\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 # ---------------------------------------------
 # Phase 2 endpoints 

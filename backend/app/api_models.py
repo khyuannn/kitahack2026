@@ -7,6 +7,8 @@ class StartCaseRequest(BaseModel):
     amount: Optional[float] = None
     incidentDate: Optional[str] = None
     floorPrice: Optional[float] = None
+    mode: Literal["ai", "pvp"] = "ai"
+    createdBy: Optional[str] = None
 
 class StartCaseResponse(BaseModel):
     caseId: str
@@ -101,6 +103,40 @@ class TurnRequest(BaseModel):
     evidence_uris: Optional[list[str]] = Field(default=[], description="Array of Gemini File API URIs for newly uploaded evidence.")
     # user's floor price (hidden from opponent, used for negotiation strategy)
     floor_price: Optional[float] = Field(default=None, description="User's minimum acceptable settlement amount in RM")
+
+
+class PvpTurnRequest(BaseModel):
+    """
+    Request model for /pvp-turn endpoint.
+    Handles one side's turn in a PvP negotiation.
+    """
+    caseId: str = Field(..., description="Case ID.")
+    user_message: str = Field(default="", description="Strategic directive from the human commander.")
+    user_role: Literal["plaintiff", "defendant"] = Field(..., description="The role of the user sending this turn.")
+    userId: Optional[str] = Field(default=None, description="Firebase Auth UID of the user.")
+    evidence_uris: Optional[list[str]] = Field(default=[], description="Array of Gemini File API URIs.")
+    floor_price: Optional[float] = Field(default=None, description="User's floor/ceiling price in RM.")
+
+
+class JoinCaseRequest(BaseModel):
+    """
+    Request model for /join endpoint.
+    Defendant joins a PvP case via invite link.
+    """
+    userId: str = Field(..., description="Firebase Auth UID of the joining user.")
+    role: Literal["defendant"] = Field(default="defendant", description="Role to join as.")
+    isAnonymous: bool = Field(default=True, description="Whether user is signed in anonymously.")
+    displayName: Optional[str] = Field(default=None, description="User display name if available.")
+
+
+class UpdateParticipantRequest(BaseModel):
+    """
+    Request model for updating a participant's UID after auth upgrade.
+    """
+    oldUserId: str = Field(..., description="Previous (anonymous) UID.")
+    newUserId: str = Field(..., description="New (Google) UID.")
+    role: Literal["plaintiff", "defendant"] = Field(..., description="Role to update.")
+    displayName: Optional[str] = Field(default=None, description="User display name.")
 
 class TurnResponse(BaseModel):
     """

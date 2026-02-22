@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/hooks/useAuth";
 
 interface CaseData {
   disputeType?: string;
@@ -15,12 +16,14 @@ interface CaseData {
 
 export default function VerificationPage() {
   const router = useRouter();
+  const { uid, isAnonymous } = useAuth();
   const [caseData, setCaseData] = useState<CaseData>({});
   const [files, setFiles] = useState<File[]>([]);
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState<boolean[]>([]);
   const [allVerified, setAllVerified] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [negotiationMode, setNegotiationMode] = useState<"ai" | "pvp">("ai");
 
   useEffect(() => {
     // Load case data from localStorage
@@ -76,6 +79,13 @@ export default function VerificationPage() {
   };
 
   const handleStartNegotiation = async () => {
+    // For PvP mode, require non-anonymous auth
+    if (negotiationMode === "pvp" && (!uid || isAnonymous)) {
+      alert("Please sign in with Google to create a PvP negotiation. Go back to the login page.");
+      router.push("/login");
+      return;
+    }
+
     setCreating(true);
     try {
       const res = await fetch("/api/cases/start", {
@@ -88,10 +98,16 @@ export default function VerificationPage() {
           amount: Number(caseData.amount) || 0,
           incidentDate: caseData.incidentDate || "",
           floorPrice: Number(caseData.floorPrice) || 0,
+          mode: negotiationMode,
+          createdBy: uid || undefined,
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to create case");
+      if (!res.ok) {
+        const errorBody = await res.text();
+        console.error("Create case failed:", res.status, errorBody);
+        throw new Error(`Failed to create case (${res.status}): ${errorBody}`);
+      }
       const { caseId } = await res.json();
 
       // Clean up
@@ -100,7 +116,7 @@ export default function VerificationPage() {
         delete (window as any).__evidenceFiles;
       }
 
-      router.push(`/negotiation/${caseId}`);
+      router.push(`/negotiation/${caseId}?role=plaintiff`);
     } catch (error) {
       console.error("Failed to create case:", error);
       setCreating(false);
@@ -256,6 +272,75 @@ export default function VerificationPage() {
               </div>
             </div>
           )}
+
+          {/* Negotiation Mode Toggle */}
+          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6">
+            <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wide mb-4">
+              Negotiation Mode
+            </h3>
+            <div className="space-y-3">
+              <button
+                onClick={() => setNegotiationMode("ai")}
+                className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
+                  negotiationMode === "ai"
+                    ? "border-[#1a2a3a] bg-[#1a2a3a]/5"
+                    : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                  negotiationMode === "ai" ? "bg-[#1a2a3a] text-white" : "bg-gray-100 text-gray-500"
+                }`}>
+                  <span className="material-icons text-xl">smart_toy</span>
+                </div>
+                <div className="text-left flex-1">
+                  <p className={`text-sm font-bold ${negotiationMode === "ai" ? "text-[#1a2a3a]" : "text-gray-700"}`}>
+                    AI Mock Negotiation
+                  </p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    Practice against an AI opponent. Perfect for testing your strategy.
+                  </p>
+                </div>
+                {negotiationMode === "ai" && (
+                  <span className="material-icons text-[#1a2a3a]">check_circle</span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setNegotiationMode("pvp")}
+                className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
+                  negotiationMode === "pvp"
+                    ? "border-[#1a2a3a] bg-[#1a2a3a]/5"
+                    : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                  negotiationMode === "pvp" ? "bg-[#1a2a3a] text-white" : "bg-gray-100 text-gray-500"
+                }`}>
+                  <span className="material-icons text-xl">group</span>
+                </div>
+                <div className="text-left flex-1">
+                  <p className={`text-sm font-bold ${negotiationMode === "pvp" ? "text-[#1a2a3a]" : "text-gray-700"}`}>
+                    Negotiate with a Real Person
+                  </p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    Invite another party to negotiate. Both sides get an AI legal copilot.
+                  </p>
+                </div>
+                {negotiationMode === "pvp" && (
+                  <span className="material-icons text-[#1a2a3a]">check_circle</span>
+                )}
+              </button>
+            </div>
+
+            {negotiationMode === "pvp" && (!uid || isAnonymous) && (
+              <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+                <span className="material-icons text-amber-500 text-lg shrink-0 mt-0.5">warning</span>
+                <p className="text-[11px] text-amber-700">
+                  PvP mode requires Google sign-in. You&apos;ll be redirected to sign in when you proceed.
+                </p>
+              </div>
+            )}
+          </div>
 
           {/* Start Negotiation Button */}
           <button

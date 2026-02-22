@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "@/firebase/config";
+import { useAuth } from "@/hooks/useAuth";
 
 interface CourtFormData {
   plaintiff_name: string;
@@ -12,19 +13,34 @@ interface CourtFormData {
 }
 
 export default function DeadlockScreen({ caseId }: { caseId: string }) {
+  const { loading: authLoading, uid } = useAuth();
   const [isDeadlock, setIsDeadlock] = useState(false);
   const [pdfData, setPdfData] = useState<CourtFormData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [deadlockRetryCount, setDeadlockRetryCount] = useState(0);
 
   // Listen to game_state changes
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, "cases", caseId), (docSnap) => {
-      const data = docSnap.data();
-      setIsDeadlock(data?.game_state?.status === "deadlock");
-    });
+    if (!uid) return;
+
+    const unsub = onSnapshot(
+      doc(db, "cases", caseId),
+      (docSnap) => {
+        const data = docSnap.data();
+        setIsDeadlock(data?.game_state?.status === "deadlock");
+        if (deadlockRetryCount > 0) setDeadlockRetryCount(0);
+      },
+      (error) => {
+        console.error("Failed to subscribe deadlock state:", error);
+        if (deadlockRetryCount < 3) {
+          console.warn(`Retrying deadlock subscription (attempt ${deadlockRetryCount + 1}/3)...`);
+          setTimeout(() => setDeadlockRetryCount((r) => r + 1), 2000 * (deadlockRetryCount + 1));
+        }
+      }
+    );
 
     return () => unsub();
-  }, [caseId]);
+  }, [caseId, uid, deadlockRetryCount]);
 
     const handleExport = async () => {
     try {

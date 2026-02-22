@@ -1,12 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import React, { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "@/firebase/config";
 import { useCaseMessages } from "@/hooks/useCaseMessages";
 import SettlementMeter from "@/app/components/settlementMeter";
 import EvidenceModal from "@/app/components/EvidenceModal";
+import { useAuth } from "@/hooks/useAuth";
+import InviteModal from "@/app/components/inviteModal";
 
 /* ── Types matching backend TurnResponse ── */
 interface ChipOption {
@@ -27,6 +29,7 @@ interface TurnResponse {
   chips: ChipOptions | null;
   game_state: string;
   counter_offer_rm: number | null;
+  current_turn?: string;
 }
 
 /* ── Default chips shown before first turn ── */
@@ -38,6 +41,15 @@ const DEFAULT_CHIPS: ChipOptions = {
     { label: "Diplomatic Approach", strategy_id: "diplomatic" },
   ],
 };
+
+const DEFAULT_DEFENDANT_CHIPS: ChipOptions = {
+  question: "How should your AI agent respond to the claim?",
+  options: [
+    { label: "Challenge Evidence", strategy_id: "challenge_evidence" },
+    { label: "Propose Counter-Offer", strategy_id: "counter_offer" },
+    { label: "Request More Details", strategy_id: "request_details" },
+  ],
+};
 interface CaseData {
   title?: string;
   caseType?: string;
@@ -46,17 +58,51 @@ interface CaseData {
   status?: string;
   game_state?: string;
   settlement?: any;
+  mode?: "ai" | "pvp";
+  plaintiffUserId?: string;
+  defendantUserId?: string;
+  currentTurn?: string;
+  turnStatus?: string;
+  pvpRound?: number;
+  defendantDisplayName?: string;
+  plaintiffDisplayName?: string;
+  defendantIsAnonymous?: boolean;
 }
 
-export default function NegotiationPage() {
+export default function NegotiationPageWrapper() {
+  return (
+    <Suspense fallback={
+      <div className="bg-off-white min-h-screen flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <span className="material-icons text-4xl text-gray-300 animate-pulse">balance</span>
+          <p className="text-sm text-gray-400 font-medium">Loading...</p>
+        </div>
+      </div>
+    }>
+      <NegotiationPage />
+    </Suspense>
+  );
+}
+
+function NegotiationPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const caseId = params.caseId as string;
+  const roleParam = searchParams.get("role") as "plaintiff" | "defendant" | null;
+
+  const {
+    uid, isAnonymous,
+    loading: authLoading,
+    signInAnonymously: doAnonSignIn,
+    upgradeAnonymousToGoogle,
+  } = useAuth();
 
   /* ── State ── */
   const [caseData, setCaseData] = useState<CaseData | null>(null);
   const [caseLoading, setCaseLoading] = useState(true);
-  const { messages, loading: messagesLoading } = useCaseMessages(caseId);
+  const [caseRetryCount, setCaseRetryCount] = useState(0);
+  const { messages, loading: messagesLoading } = useCaseMessages(caseId, !!uid);
 
   const [input, setInput] = useState("");
   const [currentRound, setCurrentRound] = useState(1);
@@ -80,6 +126,20 @@ export default function NegotiationPage() {
   const [inviteCopied, setInviteCopied] = useState(false);
   const [elapsedSecs, setElapsedSecs] = useState(0);
 
+  // PvP state
+  const [userRole, setUserRole] = useState<"plaintiff" | "defendant">(roleParam || "plaintiff");
+  const [pvpJoining, setPvpJoining] = useState(false);
+  const [pvpJoinError, setPvpJoinError] = useState<string | null>(null);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const pvpJoinedRef = React.useRef(false);
+
+  useEffect(() => {
+    if (authLoading || uid) return;
+    doAnonSignIn().catch((error) => {
+      console.error("Anonymous sign-in failed before case subscription:", error);
+    });
+  }, [authLoading, uid, doAnonSignIn]);
+
   /* ── Elapsed time counter while sending ── */
   useEffect(() => {
     if (!sending) { setElapsedSecs(0); return; }
@@ -96,15 +156,117 @@ export default function NegotiationPage() {
 
   /* ── Load case data (real-time) ── */
   useEffect(() => {
-    if (!caseId) return;
-    const unsub = onSnapshot(doc(db, "cases", caseId), (snap) => {
-      if (snap.exists()) {
-        setCaseData(snap.data() as CaseData);
+    if (!caseId || !uid) return;
+
+    const unsub = onSnapshot(
+      doc(db, "cases", caseId),
+      (snap) => {
+        if (snap.exists()) {
+          setCaseData(snap.data() as CaseData);
+        }
+        setCaseLoading(false);
+        if (caseRetryCount > 0) setCaseRetryCount(0);
+      },
+      (error) => {
+        console.error("Failed to subscribe case document:", error);
+        if (caseRetryCount < 3) {
+          console.warn(`Retrying case document subscription (attempt ${caseRetryCount + 1}/3)...`);
+          setTimeout(() => setCaseRetryCount((r) => r + 1), 2000 * (caseRetryCount + 1));
+        } else {
+          setCaseLoading(false);
+        }
       }
-      setCaseLoading(false);
-    });
+    );
+
     return () => unsub();
-  }, [caseId]);
+  }, [caseId, uid, caseRetryCount]);
+
+  /* ── Derive PvP mode ── */
+  const isPvp = caseData?.mode === "pvp";
+  const defendantJoined = !!caseData?.defendantUserId;
+  const isMyTurn = isPvp
+    ? caseData?.currentTurn === userRole && caseData?.turnStatus === "waiting"
+    : true;
+
+  /* ── Determine user role from UID vs case data ── */
+  useEffect(() => {
+    if (!caseData || !uid) return;
+    if (caseData.plaintiffUserId === uid) setUserRole("plaintiff");
+    else if (caseData.defendantUserId === uid) setUserRole("defendant");
+    else if (roleParam) setUserRole(roleParam);
+  }, [caseData, uid, roleParam]);
+
+  /* ── PvP: Auto-join for defendants ── */
+  useEffect(() => {
+    if (!isPvp || roleParam !== "defendant" || !caseId) return;
+    if (pvpJoinedRef.current || pvpJoining || caseData?.defendantUserId) return;
+
+    const joinCase = async () => {
+      setPvpJoining(true);
+      setPvpJoinError(null);
+      try {
+        let currentUid = uid;
+        if (!currentUid) {
+          const anonUser = await doAnonSignIn();
+          currentUid = anonUser?.uid ?? null;
+        }
+        if (!currentUid) throw new Error("Failed to authenticate");
+
+        const res = await fetch(`/api/cases/${caseId}/join`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: currentUid,
+            role: "defendant",
+            isAnonymous: true,
+            displayName: "Anonymous Defendant",
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || "Failed to join case");
+        }
+        pvpJoinedRef.current = true;
+        setUserRole("defendant");
+      } catch (err: any) {
+        setPvpJoinError(err.message);
+      } finally {
+        setPvpJoining(false);
+      }
+    };
+    joinCase();
+  }, [isPvp, roleParam, caseId, uid, caseData?.defendantUserId, pvpJoining, doAnonSignIn]);
+
+  /* ── PvP: Set default chips when it becomes user's turn ── */
+  useEffect(() => {
+    if (!isPvp || !isMyTurn || sending || !defendantJoined) return;
+    const defaults = userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS;
+    setChips(defaults);
+    setSelectedChip(null);
+  }, [isPvp, isMyTurn, userRole, sending, defendantJoined]);
+
+  /* ── PvP: Defensively clear chips when defendant hasn't joined ── */
+  useEffect(() => {
+    if (isPvp && !defendantJoined) {
+      setChips(null);
+      setSelectedChip(null);
+    }
+  }, [isPvp, defendantJoined]);
+
+  /* ── PvP: Auto-open invite modal when defendant hasn't joined ── */
+  useEffect(() => {
+    if (isPvp && userRole === "plaintiff" && !defendantJoined && caseData && !caseLoading) {
+      setShowInviteModal(true);
+    }
+  }, [isPvp, userRole, defendantJoined, caseData, caseLoading]);
+
+  /* ── PvP: Auto-close invite modal after defendant joins (2s delay) ── */
+  useEffect(() => {
+    if (isPvp && defendantJoined && showInviteModal) {
+      const timer = setTimeout(() => setShowInviteModal(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isPvp, defendantJoined, showInviteModal]);
 
   /* ── Round is now derived from backend response, not messages ── */
 
@@ -132,7 +294,7 @@ export default function NegotiationPage() {
     }
   }, [messages]);
 
-  /* ── Send directive (calls /api/cases/{caseId}/next-turn with streaming) ── */
+  /* ── Send directive (calls /api/cases/{caseId}/next-turn or pvp-turn with streaming) ── */
   const handleSend = useCallback(
     async (message: string) => {
       if (sending) return;
@@ -145,16 +307,31 @@ export default function NegotiationPage() {
       const timeoutId = setTimeout(() => controller.abort(), 190000);
 
       try {
-        const res = await fetch(`/api/cases/${caseId}/next-turn`, {
+        const endpoint = isPvp
+          ? `/api/cases/${caseId}/pvp-turn`
+          : `/api/cases/${caseId}/next-turn`;
+
+        const bodyPayload = isPvp
+          ? {
+              caseId,
+              user_message: directive,
+              user_role: userRole,
+              userId: uid || "",
+              evidence_uris: evidenceUris,
+              floor_price: caseData?.floorPrice ?? null,
+            }
+          : {
+              caseId,
+              user_message: directive,
+              evidence_uris: evidenceUris,
+              floor_price: caseData?.floorPrice ?? null,
+            };
+
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({
-            caseId,
-            user_message: directive,
-            evidence_uris: evidenceUris,
-            floor_price: caseData?.floorPrice ?? null,
-          }),
+          body: JSON.stringify(bodyPayload),
         });
 
         if (!res.ok) {
@@ -191,9 +368,14 @@ export default function NegotiationPage() {
               } else if (event.type === "result") {
                 const data: TurnResponse = event.data;
                 setGameState(data.game_state);
-                if (data.chips) setChips(data.chips);
-                else if (data.game_state === "active") setChips(DEFAULT_CHIPS);
-                else setChips(null);
+                // In PvP, chips for the next player come via Firestore/effect — skip here
+                if (!isPvp) {
+                  if (data.chips) setChips(data.chips);
+                  else if (data.game_state === "active") setChips(DEFAULT_CHIPS);
+                  else setChips(null);
+                } else {
+                  setChips(null); // Clear chips; they'll reload via the turn-change effect
+                }
                 if (data.counter_offer_rm != null) setCounterOffer(data.counter_offer_rm);
                 if (!data.auditor_passed && data.auditor_warning) {
                   setAuditorWarning(data.auditor_warning);
@@ -227,7 +409,7 @@ export default function NegotiationPage() {
         setInput("");
       }
     },
-    [caseId, evidenceUris, caseData, sending]
+    [caseId, evidenceUris, caseData, sending, isPvp, userRole, uid]
   );
 
   /* ── Accept / Reject offer ── */
@@ -302,7 +484,7 @@ export default function NegotiationPage() {
 
   /* ── Invite link ── */
   const handleCopyInvite = async () => {
-    const link = `${window.location.origin}/negotiation/${caseId}`;
+    const link = `${window.location.origin}/negotiation/${caseId}?role=defendant`;
     await navigator.clipboard.writeText(link);
     setInviteCopied(true);
     setTimeout(() => setInviteCopied(false), 2000);
@@ -312,9 +494,11 @@ export default function NegotiationPage() {
   const isSettled = gameState === "settled";
   const isDeadlock = gameState === "deadlock";
   const mediatorGatePassed = currentRound < 3 || mediatorShown;
-  const commanderInputEnabled = isActive && mediatorGatePassed;
+  const commanderInputEnabled = isActive && mediatorGatePassed && (!isPvp || (isMyTurn && defendantJoined));
 
+  /* ── Mediator auto-trigger (AI mode only) ── */
   useEffect(() => {
+    if (isPvp) return; // Mediator injection handled server-side in PvP
     if (!isActive || sending || showDecision || mediatorShown) return;
     if (currentRound !== 2 || mediatorAutoTriggered) return;
 
@@ -348,15 +532,167 @@ export default function NegotiationPage() {
     );
   }
 
+  /* ── PvP: Defendant joining screen ── */
+  if (isPvp && roleParam === "defendant" && pvpJoining) {
+    return (
+      <div className="bg-off-white min-h-screen flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <div className="relative w-10 h-10 mx-auto">
+            <div className="absolute inset-0 border-2 border-indigo-200 rounded-full" />
+            <div className="absolute inset-0 border-2 border-indigo-500 rounded-full border-t-transparent animate-spin" />
+          </div>
+          <p className="text-sm text-gray-500 font-medium">Joining negotiation...</p>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── PvP: Join error screen ── */
+  if (isPvp && pvpJoinError) {
+    return (
+      <div className="bg-off-white min-h-screen flex items-center justify-center">
+        <div className="text-center space-y-3 max-w-sm px-4">
+          <span className="material-icons text-4xl text-red-400">error</span>
+          <p className="text-sm text-red-600 font-medium">{pvpJoinError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-2 bg-[#1a2a3a] text-white px-4 py-2 rounded-lg text-sm hover:bg-[#243447]"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── PvP: Plaintiff waiting for defendant — FULL BLOCKING SCREEN ── */
+  if (isPvp && userRole === "plaintiff" && !defendantJoined) {
+    return (
+      <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 flex justify-center">
+        <div className="w-full max-w-md md:max-w-2xl bg-white min-h-screen shadow-2xl relative flex flex-col">
+          {/* Header */}
+          <header className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 bg-white">
+            <button
+              onClick={() => router.push("/dashboard")}
+              className="w-9 h-9 rounded-lg bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors"
+            >
+              <span className="material-icons text-lg text-gray-600">arrow_back</span>
+            </button>
+            <div className="flex-1 min-w-0">
+              <h1 className="font-display text-lg font-bold text-black truncate">
+                {caseData?.title || "Negotiation"}
+              </h1>
+              <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
+                PvP Mode &middot; Waiting for Opponent
+              </p>
+            </div>
+          </header>
+
+          {/* Waiting content */}
+          <div className="flex-1 flex flex-col items-center justify-center px-6 py-12">
+            <div className="text-center space-y-6 max-w-sm">
+              <div className="relative w-20 h-20 mx-auto">
+                <div className="absolute inset-0 border-4 border-gray-100 rounded-full" />
+                <div className="absolute inset-0 border-4 border-indigo-500 rounded-full border-t-transparent animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="material-icons text-3xl text-gray-300">group_add</span>
+                </div>
+              </div>
+
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-2">Waiting for Opponent</h2>
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  Share the invite link below to get the other party to join this negotiation.
+                </p>
+              </div>
+
+              {/* Inline invite link box */}
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 text-left">
+                <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">
+                  Invite Link
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2.5 overflow-hidden">
+                    <p className="text-xs text-gray-600 truncate font-mono">
+                      {typeof window !== "undefined"
+                        ? `${window.location.origin}/negotiation/${caseId}?role=defendant`
+                        : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleCopyInvite}
+                    className={`shrink-0 px-4 py-2.5 rounded-lg text-xs font-bold transition-all ${
+                      inviteCopied
+                        ? "bg-green-500 text-white"
+                        : "bg-[#1a2a3a] text-white hover:bg-[#243447]"
+                    }`}
+                  >
+                    {inviteCopied ? "Copied!" : "Copy Link"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Open full invite modal */}
+              <button
+                onClick={() => setShowInviteModal(true)}
+                className="text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition-colors underline underline-offset-2"
+              >
+                View full invite details
+              </button>
+
+              {/* How PvP works */}
+              <div className="border-t border-gray-100 pt-5">
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3">
+                  How it works
+                </p>
+                <div className="space-y-2 text-left">
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                      <span className="text-[10px] font-bold text-indigo-600">1</span>
+                    </div>
+                    <p className="text-xs text-gray-500">Copy and send the invite link to the other party</p>
+                  </div>
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                      <span className="text-[10px] font-bold text-indigo-600">2</span>
+                    </div>
+                    <p className="text-xs text-gray-500">They join anonymously — no sign-in required</p>
+                  </div>
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                      <span className="text-[10px] font-bold text-indigo-600">3</span>
+                    </div>
+                    <p className="text-xs text-gray-500">Negotiation begins — both sides get an AI legal copilot</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Invite Modal (also available via "View full invite details") */}
+          <InviteModal
+            isOpen={showInviteModal}
+            onClose={() => setShowInviteModal(false)}
+            caseId={caseId}
+            defendantJoined={defendantJoined}
+            defendantDisplayName={caseData?.defendantDisplayName}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 flex justify-center">
       <div className="w-full max-w-md md:max-w-7xl md:grid md:grid-cols-[140px_1fr_140px] min-h-screen">
-        {/* ── Defendant Avatar (desktop only, left side) ── */}
+        {/* ── Opponent Avatar (desktop only, left side) ── */}
         <div className="hidden md:flex flex-col items-center justify-center gap-3 sticky top-0 h-screen">
           <div className="w-28 h-28 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center shadow-lg">
             <span className="material-icons text-5xl">person</span>
           </div>
-          <span className="text-sm font-bold uppercase tracking-wider text-gray-500">Defendant</span>
+          <span className="text-sm font-bold uppercase tracking-wider text-gray-500">
+            {userRole === "plaintiff" ? "Defendant" : "Plaintiff"}
+          </span>
         </div>
 
         {/* ── Chat Column ── */}
@@ -375,18 +711,35 @@ export default function NegotiationPage() {
               {caseData?.title || "Negotiation"}
             </h1>
             <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
-              Round {currentRound} &middot;{" "}
-              {isSettled ? "Settled" : isDeadlock ? "Deadlock" : "Active"}
+              Round {isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound} &middot;{" "}
+              {isSettled ? "Settled" : isDeadlock ? "Deadlock" : isPvp ? `${userRole === "plaintiff" ? "Plaintiff" : "Defendant"}` : "Active"}
+              {isPvp && isActive && (
+                <span className={isMyTurn ? "text-green-600" : "text-amber-500"}>
+                  {" "}&middot; {isMyTurn ? "Your Turn" : "Opponent's Turn"}
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-1">
+            {/* Anonymous user sign-in upgrade */}
+            {isAnonymous && (
+              <button
+                onClick={upgradeAnonymousToGoogle}
+                className="h-9 px-3 rounded-lg bg-blue-50 text-blue-600 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 hover:bg-blue-100 transition-colors"
+                title="Sign in with Google"
+              >
+                <span className="material-icons" style={{ fontSize: 16 }}>login</span>
+                Sign in
+              </button>
+            )}
+            {/* Share / Invite button */}
             <button
-              onClick={handleCopyInvite}
+              onClick={isPvp ? () => setShowInviteModal(true) : handleCopyInvite}
               className="w-9 h-9 rounded-lg bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors"
-              title="Copy invite link"
+              title={isPvp ? "Invite opponent" : "Copy invite link"}
             >
               <span className="material-icons text-lg text-gray-600">
-                {inviteCopied ? "check" : "share"}
+                {inviteCopied ? "check" : isPvp ? "person_add" : "share"}
               </span>
             </button>
           </div>
@@ -410,11 +763,33 @@ export default function NegotiationPage() {
 
         {/* ── Chat Messages ── */}
         <div ref={chatBoxRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {messages.length === 0 && (
+          {/* PvP: Waiting for opponent to join */}
+          {isPvp && userRole === "plaintiff" && !defendantJoined && (
+            <div className="text-center py-12">
+              <span className="material-icons text-5xl text-gray-200 mb-3 block">group_add</span>
+              <p className="text-sm text-gray-500 font-medium">
+                Waiting for opponent to join...
+              </p>
+              <p className="text-[10px] text-gray-300 mt-1 mb-4">
+                Share the invite link to get started
+              </p>
+              <button
+                onClick={() => setShowInviteModal(true)}
+                className="bg-[#1a2a3a] text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-[#243447] transition-colors"
+              >
+                <span className="material-icons align-middle mr-1.5" style={{ fontSize: 16 }}>person_add</span>
+                Invite Opponent
+              </button>
+            </div>
+          )}
+
+          {messages.length === 0 && (!isPvp || defendantJoined) && (
             <div className="text-center py-12">
               <span className="material-icons text-5xl text-gray-200 mb-3 block">smart_toy</span>
               <p className="text-sm text-gray-400">
-                Choose a strategy below to start the AI negotiation
+                {isPvp
+                  ? `Choose a strategy below to start — you are the ${userRole}`
+                  : "Choose a strategy below to start the AI negotiation"}
               </p>
               <p className="text-[10px] text-gray-300 mt-1">
                 Your AI agent will argue on your behalf
@@ -436,13 +811,16 @@ export default function NegotiationPage() {
               );
             }
 
-            const isPlaintiff = msg.role === "plaintiff" || msg.role === "user";
+            // In PvP, mirror messages based on role; in AI, plaintiff always right
+            const isMyMessage = isPvp
+              ? msg.role === userRole
+              : (msg.role === "plaintiff" || msg.role === "user");
             const isMediator = msg.role === "mediator";
             return (
-              <div key={msg.id} className={`flex ${isMediator ? "justify-center" : isPlaintiff ? "justify-end" : "justify-start"}`}>
+              <div key={msg.id} className={`flex ${isMediator ? "justify-center" : isMyMessage ? "justify-end" : "justify-start"}`}>
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                    isPlaintiff
+                    isMyMessage
                       ? "bg-[#1a2a3a] text-white rounded-br-md"
                       : isMediator
                       ? "bg-amber-50 text-amber-900 border border-amber-200 rounded-bl-md"
@@ -450,9 +828,9 @@ export default function NegotiationPage() {
                   } ${isMediator ? "text-center" : ""}`}
                 >
                   <p className="text-[10px] font-bold uppercase tracking-wider mb-1 opacity-60">
-                    {isPlaintiff
+                    {isMyMessage
                       ? "Your Agent"
-                      : msg.role === "defendant"
+                      : (msg.role === "defendant" || msg.role === "plaintiff")
                       ? "Opponent"
                       : msg.role === "mediator"
                       ? "Mediator"
@@ -775,10 +1153,38 @@ export default function NegotiationPage() {
           </div>
         )}
 
-        {isActive && currentRound >= 3 && !mediatorShown && !sending && (
+        {/* ── AI mode: Mediator wait gate ── */}
+        {!isPvp && isActive && currentRound >= 3 && !mediatorShown && !sending && (
           <div className="px-5 py-3 border-t border-gray-100 bg-gray-50 text-center">
             <p className="text-xs text-gray-500">
               Mediator intervention is being prepared. Controls will unlock after the mediator message.
+            </p>
+          </div>
+        )}
+
+        {/* ── PvP: Waiting for opponent's move ── */}
+        {isPvp && isActive && !isMyTurn && !sending && defendantJoined && (
+          <div className="px-5 py-4 bg-amber-50 border-t border-amber-200 text-center">
+            <div className="flex items-center justify-center gap-2 mb-1">
+              <div className="relative w-4 h-4">
+                <div className="absolute inset-0 border-2 border-amber-300 rounded-full" />
+                <div className="absolute inset-0 border-2 border-amber-500 rounded-full border-t-transparent animate-spin" />
+              </div>
+              <p className="text-xs font-bold text-amber-700 uppercase tracking-wider">
+                Waiting for opponent&apos;s move...
+              </p>
+            </div>
+            <p className="text-[10px] text-amber-500">
+              You&apos;ll be notified when it&apos;s your turn
+            </p>
+          </div>
+        )}
+
+        {/* ── PvP: Turn is being processed ── */}
+        {isPvp && caseData?.turnStatus === "processing" && !sending && (
+          <div className="px-5 py-3 bg-indigo-50 border-t border-indigo-100 text-center">
+            <p className="text-xs text-indigo-500 animate-pulse">
+              AI agents are deliberating...
             </p>
           </div>
         )}
@@ -790,14 +1196,27 @@ export default function NegotiationPage() {
           onValidated={handleEvidenceValidated}
           caseId={caseId}
         />
+
+        {/* ── Invite Modal (PvP) ── */}
+        {isPvp && (
+          <InviteModal
+            isOpen={showInviteModal}
+            onClose={() => setShowInviteModal(false)}
+            caseId={caseId}
+            defendantJoined={defendantJoined}
+            defendantDisplayName={caseData?.defendantDisplayName}
+          />
+        )}
         </div>
 
-        {/* ── Plaintiff Avatar (desktop only, right side) ── */}
+        {/* ── Your Avatar (desktop only, right side) ── */}
         <div className="hidden md:flex flex-col items-center justify-center gap-3 sticky top-0 h-screen">
           <div className="w-28 h-28 rounded-full bg-[#1a2a3a] text-white flex items-center justify-center shadow-lg">
             <span className="material-icons text-5xl">person</span>
           </div>
-          <span className="text-sm font-bold uppercase tracking-wider text-gray-500">Plaintiff</span>
+          <span className="text-sm font-bold uppercase tracking-wider text-gray-500">
+            {userRole === "plaintiff" ? "Plaintiff" : "Defendant"}
+          </span>
         </div>
       </div>
     </div>

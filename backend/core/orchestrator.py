@@ -110,6 +110,7 @@ def generate_strategy_chips(
     counter_offer: Optional[int],
     history: List[Dict[str, Any]],
     progress_callback=None,
+    role: str = "plaintiff",
 ) -> Optional[Dict[str, Any]]:
     """Generate validated strategy chips with timeout-safe fallbacks."""
     def emit(step, message):
@@ -127,6 +128,7 @@ def generate_strategy_chips(
             "case_title": case_title,
             "current_round": current_round,
             "counter_offer": counter_offer,
+            "role": role,
         }
         chips_prompt = generate_chips_prompt(
             conversation_history=conversation_history_str,
@@ -903,6 +905,398 @@ def generate_mediator_settlement(case_id: str) -> Dict[str, Any]:
     except Exception as e:
         print(f"❌ Mediator settlement error: {str(e)}")
         raise e
+
+# =============================================================================
+# PvP: Single-Side Negotiation Turn
+# =============================================================================
+def run_pvp_negotiation_turn(
+    case_id: str,
+    user_message: str = "",
+    user_role: str = "plaintiff",
+    evidence_uris: Optional[List[str]] = None,
+    floor_price: Optional[int] = None,
+    progress_callback=None,
+) -> Dict[str, Any]:
+    """
+    PvP Mode: Execute ONE side's turn (plaintiff OR defendant, not both).
+    
+    The human commander sends a directive, the AI agent for that role responds.
+    Then the turn flips to the other side.
+    
+    Flow:
+    1. Retrieve case context & derive round
+    2. Save user directive
+    3. RAG search for relevant laws
+    4. Generate AI response for the user's role only
+    5. Auditor validation
+    6. Check if mediator should be injected (after both sides complete round 2)
+    7. Evaluate game state
+    8. Generate strategy chips for the NEXT player
+    9. Flip turn to opposite role
+    10. Return result
+    """
+    def emit(step, message):
+        if progress_callback:
+            progress_callback(step, message)
+
+    db = get_db()
+    case_ref = db.collection("cases").document(case_id)
+    messages_ref = case_ref.collection("messages")
+
+    try:
+        turn_started_at = time.monotonic()
+
+        # =====================================================================
+        # Step 1: Retrieve case context
+        # =====================================================================
+        emit("context", "Analyzing case context...")
+
+        case_data = case_ref.get().to_dict()
+        case_title = case_data.get("title", "Dispute")
+        case_type = case_data.get("caseType", "tenancy_deposit")
+        claim_amount = case_data.get("amount", 0) or 0
+        pvp_round = case_data.get("pvpRound", 1)
+
+        # Get conversation history
+        history = []
+        messages_docs = messages_ref.order_by("createdAt").stream()
+        for msg_doc in messages_docs:
+            msg_data = msg_doc.to_dict()
+            history.append({
+                "role": msg_data.get("role"),
+                "content": msg_data.get("content"),
+                "round": msg_data.get("round"),
+            })
+
+        print(f"\n{'='*60}")
+        print(f"🎮 [PvP Round {pvp_round}] {user_role.upper()} turn for case {case_id}")
+        print(f"   Commander directive: {user_message[:80] if user_message else '(none)'}")
+        print(f"{'='*60}")
+
+        # Get evidence context
+        evidence_docs = case_ref.collection("evidence").stream()
+        evidence_texts = []
+        for edoc in evidence_docs:
+            evidence_data = edoc.to_dict()
+            extracted = evidence_data.get("extractedText")
+            if extracted:
+                evidence_texts.append(extracted)
+
+        clipped_evidence = [_clip_text(text, 700) for text in evidence_texts[:8] if text]
+        evidence_context = "\n".join(clipped_evidence) if clipped_evidence else "No evidence provided."
+        evidence_uri_context = ""
+        if evidence_uris:
+            trimmed_uris = evidence_uris[:5]
+            evidence_uri_context = "\nAttached Evidence File URIs:\n" + "\n".join([f"- {uri}" for uri in trimmed_uris])
+        case_facts = f"Case Type: {case_type}\nTitle: {case_title}\nEvidence Summary: {evidence_context}"
+        if evidence_uri_context:
+            case_facts += evidence_uri_context
+
+        # =====================================================================
+        # Step 2: Save user directive
+        # =====================================================================
+        if user_message and user_message.strip():
+            print(f"📝 Saving {user_role} commander directive...")
+            messages_ref.add({
+                "role": "directive",
+                "content": f"[{user_role.upper()}] {user_message.strip()}",
+                "round": pvp_round,
+                "createdAt": firestore.SERVER_TIMESTAMP,
+            })
+
+        # =====================================================================
+        # Step 3: Set turn status to processing
+        # =====================================================================
+        case_ref.update({"turnStatus": "processing"})
+
+        # =====================================================================
+        # Step 4: RAG - Search for relevant laws
+        # =====================================================================
+        emit("rag", "Searching legal database for relevant laws...")
+        rag_parts = [case_type, case_title]
+        if user_message:
+            rag_parts.append(user_message)
+        rag_query = " ".join(rag_parts)
+        legal_docs = []
+        try:
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(retrieve_law, query=rag_query, history=history, use_agentic=True)
+            try:
+                legal_docs = future.result(timeout=45)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+        except concurrent.futures.TimeoutError:
+            print(f"⏰ RAG search timed out")
+            emit("rag_warn", "⚠ Legal search timed out — proceeding without case law")
+        except Exception as e:
+            print(f"⚠️  RAG search error: {e}")
+            emit("rag_warn", f"⚠ Legal search failed — proceeding anyway")
+
+        if legal_docs:
+            legal_context = "\n".join([
+                f"- {doc['law']} Section {doc['section']}: {doc['excerpt'][:300]}..."
+                for doc in legal_docs
+            ])
+        else:
+            legal_context = "No specific laws retrieved. Rely on general contract principles."
+
+        # Compute floor/ceiling prices
+        defendant_max_offer = int(claim_amount * 0.5) if claim_amount > 0 else (floor_price or 0)
+
+        case_data_dict = {
+            "case_title": case_title,
+            "case_type": case_type,
+            "case_facts": case_facts,
+            "evidence_summary": evidence_context,
+            "floor_price": floor_price or 0,
+            "dispute_amount": claim_amount,
+            "defendant_max_offer": defendant_max_offer,
+            "legal_context": legal_context,
+        }
+
+        if time.monotonic() - turn_started_at > TURN_TOTAL_TIMEOUT_SEC:
+            raise TimeoutError(f"Turn exceeded {TURN_TOTAL_TIMEOUT_SEC}s")
+
+        # Format conversation history for prompts (exclude directives)
+        conversation_history = "\n".join([
+            f"[{msg['role'].upper()}]: {msg['content']}"
+            for msg in history[-6:]
+            if msg['role'] != 'directive'
+        ])
+
+        # =====================================================================
+        # Step 5: Generate AI response for this role
+        # =====================================================================
+        agent_text = None
+        counter_offer = None
+        game_eval = {"has_offer": False, "offer_amount": None, "meets_floor": False}
+        
+        if user_role == "plaintiff":
+            emit("plaintiff", "Your agent is building legal arguments...")
+            print(f"🤖 [PvP Round {pvp_round}] Generating plaintiff response...")
+
+            plaintiff_prompt = build_plaintiff_prompt(
+                case_data=case_data_dict,
+                current_round=pvp_round
+            )
+            directive_section = ""
+            if user_message and user_message.strip():
+                directive_section = f"\n[COMMANDER DIRECTIVE]: The user wants you to: {user_message.strip()}\nIncorporate this strategic direction into your argument."
+
+            full_prompt = f"""{plaintiff_prompt}
+
+=== CONVERSATION HISTORY ===
+{conversation_history}
+{directive_section}
+
+=== CURRENT SITUATION ===
+Round {pvp_round} of {MAX_ROUNDS}
+
+Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
+
+        else:  # defendant
+            emit("defendant", "Your agent is preparing defense...")
+            print(f"🤖 [PvP Round {pvp_round}] Generating defendant response...")
+
+            defendant_prompt = build_defendant_prompt(
+                case_data=case_data_dict,
+                current_round=pvp_round
+            )
+            directive_section = ""
+            if user_message and user_message.strip():
+                directive_section = f"\n[COMMANDER DIRECTIVE]: The user wants you to: {user_message.strip()}\nIncorporate this strategic direction into your defense."
+
+            # Get last plaintiff message for context
+            last_plaintiff = next((m for m in reversed(history) if m["role"] == "plaintiff"), None)
+            plaintiff_context = f'\nThe plaintiff just said: "{last_plaintiff["content"][:200]}"' if last_plaintiff else ""
+
+            full_prompt = f"""{defendant_prompt}
+
+=== CONVERSATION HISTORY ===
+{conversation_history}
+{directive_section}
+
+=== CURRENT SITUATION ===
+Round {pvp_round} of {MAX_ROUNDS}
+{plaintiff_context}
+
+Now respond as the Defendant. Remember to output ONLY valid JSON."""
+
+        # Generate response
+        try:
+            gen_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            gen_future = gen_executor.submit(
+                call_gemini_with_retry, full_prompt, 2, 30, progress_callback
+            )
+            try:
+                raw_response = gen_future.result(timeout=90)
+            finally:
+                gen_executor.shutdown(wait=False, cancel_futures=True)
+
+            try:
+                cleaned = raw_response.strip()
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+                elif cleaned.startswith("```"):
+                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
+                response_json = json.loads(cleaned)
+                agent_text = response_json.get("message", cleaned)
+                if user_role == "defendant":
+                    game_eval = evaluate_game_state(response_json, floor_price or 0)
+                    counter_offer = game_eval["offer_amount"]
+                else:
+                    counter_offer = response_json.get("counter_offer_rm")
+                print(f"✅ {user_role.capitalize()} JSON parsed. Offer: {counter_offer}")
+            except json.JSONDecodeError:
+                agent_text = raw_response
+                counter_offer = None
+        except concurrent.futures.TimeoutError:
+            agent_text = "I need a moment to review the case details. I maintain my current position."
+            counter_offer = None
+        except Exception as e:
+            print(f"❌ {user_role} generation failed: {e}")
+            raise
+
+        # =====================================================================
+        # Step 6: Save message & audit
+        # =====================================================================
+        print(f"💾 Saving {user_role} message...")
+        msg_ref = messages_ref.add({
+            "role": user_role,
+            "content": agent_text,
+            "round": pvp_round,
+            "counter_offer_rm": counter_offer,
+            "auditor_passed": None,
+            "auditor_warning": None,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        })[1]
+
+        emit("auditor", f"Validating {user_role} legal citations...")
+        audit_result = validate_turn(agent_text)
+        auditor_passed = audit_result["is_valid"]
+        auditor_warning = None
+
+        if not auditor_passed:
+            auditor_warning = audit_result.get("auditor_warning", "Citation validation failed")
+            emit("auditor_warn", f"⚠ Audit failed: {auditor_warning[:80]}")
+
+        msg_ref.update({
+            "auditor_passed": auditor_passed,
+            "auditor_warning": auditor_warning if not auditor_passed else None,
+        })
+
+        # =====================================================================
+        # Step 7: Determine turn flip + round advancement
+        # =====================================================================
+        opposite_role = "defendant" if user_role == "plaintiff" else "plaintiff"
+
+        # Check if the round should advance (both sides have submitted for current round)
+        # After plaintiff submits → turn goes to defendant (same round)
+        # After defendant submits → round advances, turn goes to plaintiff
+        if user_role == "plaintiff":
+            # Plaintiff just went, defendant's turn next (same round)
+            next_turn = "defendant"
+            next_round = pvp_round
+        else:
+            # Defendant just went, advance round, plaintiff's turn next
+            next_round = pvp_round + 1
+            next_turn = "plaintiff"
+
+        # =====================================================================
+        # Step 8: Inject mediator after round 2 completes (both sides done)
+        # =====================================================================
+        mediator_already_injected = any(m.get("role") == "mediator" for m in history)
+        if user_role == "defendant" and pvp_round == 2 and not mediator_already_injected:
+            emit("mediator", "⚖️ Mediator is reviewing the case...")
+            updated_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
+            inject_mediator_guidance(case_id, case_data_dict, updated_history)
+
+        # =====================================================================
+        # Step 9: Evaluate game state
+        # =====================================================================
+        game_state = "active"
+
+        if user_role == "defendant" and game_eval.get("meets_floor"):
+            game_state = "settled"
+            case_ref.update({"status": "done"})
+            print(f"🎉 PvP Settlement reached! Offer ({counter_offer}) meets floor ({floor_price})")
+
+        if next_round > MAX_ROUNDS:
+            if game_state != "settled":
+                game_state = "pending_decision"
+                next_round = MAX_ROUNDS
+                print(f"⏰ Max rounds reached. Awaiting user decision...")
+
+        # =====================================================================
+        # Step 10: Generate chips for the NEXT player
+        # =====================================================================
+        chips = None
+        if game_state == "active":
+            updated_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
+            chips = generate_strategy_chips(
+                case_title=case_title,
+                current_round=next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS,
+                counter_offer=counter_offer,
+                history=updated_history,
+                progress_callback=progress_callback,
+                role=next_turn,  # Generate chips for the next player's role
+            )
+
+        # =====================================================================
+        # Step 11: Update case doc — flip turn
+        # =====================================================================
+        case_ref.update({
+            "currentTurn": next_turn,
+            "turnStatus": "waiting",
+            "pvpRound": next_round,
+        })
+
+        emit("complete", "Turn complete!")
+        print(f"✅ [PvP Round {pvp_round}] {user_role} turn complete. Next: {next_turn}, Round: {next_round}")
+
+        return {
+            "agent_message": agent_text,
+            "plaintiff_message": agent_text if user_role == "plaintiff" else None,
+            "current_round": pvp_round,
+            "audio_url": None,
+            "auditor_passed": auditor_passed,
+            "auditor_warning": auditor_warning,
+            "counter_offer_rm": counter_offer,
+            "game_state": game_state,
+            "citations_found": audit_result.get("citations_found", []),
+            "chips": chips,
+            "current_turn": next_turn,
+        }
+
+    except Exception as e:
+        error_msg = str(e)
+        print(f"❌ [PvP Orchestrator] Turn error: {error_msg}")
+        import traceback
+        traceback.print_exc()
+
+        # Reset turn status so the player can retry
+        try:
+            case_ref.update({"turnStatus": "waiting"})
+        except Exception:
+            pass
+
+        emit("error", f"❌ Error: {error_msg[:150]}")
+
+        return {
+            "agent_message": f"System error: {error_msg}",
+            "plaintiff_message": None,
+            "current_round": case_data.get("pvpRound", 1) if 'case_data' in dir() else 1,
+            "audio_url": None,
+            "auditor_passed": False,
+            "auditor_warning": f"System error: {error_msg}",
+            "counter_offer_rm": None,
+            "game_state": "error",
+            "citations_found": [],
+            "chips": None,
+            "current_turn": user_role,
+        }
+
 
 # phase 1 & 1.5: basic dumb loop (no RAG)
 def run_dumb_loop(case_id: str, mode: str = "mvp") -> None:
