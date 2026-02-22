@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /c/Users/choon/kitahack2026 && python -c \"import ast; ast.parse\\(open\\('backend/core/orchestrator.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\" 2>&1)"
+    ]
+  }
+}

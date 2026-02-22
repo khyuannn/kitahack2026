@@ -21,13 +21,17 @@ Case Facts: {case_facts}
 Evidence Summary: {evidence_summary}
 Legal Context: {legal_context}
 
-CRITICAL RULE:
-If you cite a law, you MUST use the full formal name including the year.
-Cite exactly ONE section per sentence.
-Example: "Under Section 75 of the Contracts Act 1950..."
-Do NOT use abbreviations.
-Do NOT cite multiple sections together.
-Do NOT invent laws outside Legal Context.
+CITATION RULES:
+- Use legal citations strategically to support key arguments, NOT in every sentence.
+- Natural negotiation language is preferred.
+- If you cite a law, use the full formal name including the year (e.g. "Section 75 of the Contracts Act 1950").
+- Do NOT invent laws outside Legal Context.
+
+STYLE RULES:
+- Under 150 words. Be concise and punchy.
+- Don't repeat arguments from previous rounds — build on them.
+- Acknowledge the opponent's valid points briefly before countering.
+- Conversational but professional tone.
 
 Secret Floor Price (Minimum Acceptable): RM {floor_price}
 Round: {current_round} of 4
@@ -35,43 +39,42 @@ Round: {current_round} of 4
 
     if current_round == 1:
         round_directive = """
-GOAL (Opening):
-- Acknowledge the dispute.
-- Present initial legal position firmly.
-- Reference available evidence immediately to establish credibility.
-- Set the tone: you expect full recovery of the disputed amount.
-- Do NOT make final offer yet.
+GOAL (Round 1 — Establish & Anchor):
+- Be collaborative but firm. Set a professional tone.
+- Establish the key facts of the dispute clearly.
+- Light legal framing only — reference 1-2 relevant provisions at most.
+- Anchor high: state your full claim amount as the starting position.
+- Do NOT make concessions yet. Show willingness to negotiate.
 """
     elif current_round == 2:
         round_directive = """
-GOAL (Attack):
-- Systematically challenge the opponent's arguments point by point.
-- Cite ONE specific law section per argument (use full formal name + year).
-- Highlight weaknesses in the opponent's evidence or lack thereof.
-- Reinforce your evidence strength.
-- Make a firm counter-offer that is assertive but not your floor.
+GOAL (Round 2 — Assert & Challenge):
+- Be assertive. Use selective citations for your strongest points (1-2 max).
+- Challenge specific weaknesses in the defendant's arguments or evidence gaps.
+- Acknowledge any valid points the defendant raised, then pivot to why they don't change the outcome.
+- Make a firm counter-offer that signals movement but stays well above your floor.
 """
     elif current_round == 3:
         round_directive = f"""
-GOAL (Negotiation - Post-Mediation):
-- Acknowledge the mediator's guidance where it supports your position.
-- Move toward compromise but remain firm on key points.
-- Provide counter-offer above RM {floor_price}.
-- Explain WHY your offer is reasonable using evidence and law.
+GOAL (Round 3 — Mediator-Informed Compromise):
+- Reference the mediator's guidance where it supports your position.
+- Compromise on secondary issues to show good faith.
+- Hold firm on your core claim. Counter-offer must stay above RM {floor_price}.
+- Begin signaling consequences: "If we can't resolve this, I'll need to consider formal proceedings."
 """
     else:
         round_directive = f"""
-GOAL (Final Proposal):
-- Make take-it-or-leave-it offer.
-- Never settle below RM {floor_price}.
-- Summarize your strongest legal and evidence-based arguments.
-- Make clear this is your final position.
+GOAL (Round 4 — Final Offer with BATNA):
+- Deploy your BATNA: "If we can't agree, I will file in Small Claims Court under the relevant Act. Court costs, time, and uncertainty affect both of us."
+- Make your final offer. Never settle below RM {floor_price}.
+- Summarize your 2-3 strongest arguments concisely.
+- Frame acceptance as the rational choice for both parties.
 """
 
     output_format = """
 [OUTPUT - ONLY VALID JSON]
 {
-  "message": "Your conversational response. Be concise but thorough (under 150 words).",
+  "message": "Your conversational response. Be concise and punchy (under 150 words).",
   "counter_offer_rm": number
 }
 """

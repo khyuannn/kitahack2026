@@ -31,6 +31,8 @@ Do NOT provide legal advice.
 Output ONLY raw JSON. No markdown. No extra text.
 
 {
+  "plaintiff_details": "Description of plaintiff party based on case facts (e.g. 'Tenant / Claimant')",
+  "defendant_details": "Description of defendant party based on case facts (e.g. 'Landlord / Respondent')",
   "statement_of_claim": "Formal paragraph-style summary suitable for printing.",
   "claimed_amount_rm": number,
   "final_plaintiff_offer_rm": number,

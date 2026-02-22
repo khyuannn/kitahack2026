@@ -1059,7 +1059,7 @@ async def export_court_filing(
             })
         
         conversation_history = "\n".join([
-            f"[Round {m['round']}] {m['role'].upper()}: {m['content']}"
+            f"[Round {m.get('round')}] {(m.get('role') or 'unknown').upper()}: {m.get('content') or ''}"
             for m in messages
         ])
         
@@ -1082,15 +1082,19 @@ async def export_court_filing(
             "{round_number}", str(len(messages))
         )
         
-        # Generate filing
-        raw_response = call_gemini_with_retry(filing_prompt)
+        # Generate filing (sync call — run in thread to avoid blocking event loop)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        raw_response = await loop.run_in_executor(None, call_gemini_with_retry, filing_prompt)
         
         # Parse JSON
         try:
             cleaned = raw_response.strip()
             if cleaned.startswith("```json"):
                 cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-            
+            elif cleaned.startswith("```"):
+                cleaned = cleaned.split("```")[1].split("```")[0].strip()
+
             filing_json = json.loads(cleaned)
             return CourtFilingResponse(
                 plaintiff_details=filing_json.get("plaintiff_details", "User (Plaintiff)"),
@@ -1105,6 +1109,8 @@ async def export_court_filing(
                 negotiation_summary=f"Status: {filing_json.get('negotiation_status', 'deadlock')}"
             )
         except Exception as e:
+            print(f"❌ Court filing JSON parse error: {e}")
+            print(f"   Raw response: {raw_response[:300] if raw_response else 'None'}")
             #fallback
             return CourtFilingResponse(
                 plaintiff_details="User",
@@ -1188,12 +1194,14 @@ async def accept_final_offer(caseId: str):
                 "settlement": case_data.get("settlement")
             }
         
-        # Generate final settlement
+        # Generate final settlement (sync function — run in thread to avoid blocking event loop)
         from backend.core.orchestrator import generate_mediator_settlement
-        
+        import asyncio
+
         try:
-            settlement = generate_mediator_settlement(caseId)
-            
+            loop = asyncio.get_event_loop()
+            settlement = await loop.run_in_executor(None, generate_mediator_settlement, caseId)
+
             return {
                 "status": "settled",
                 "settlement": settlement,
@@ -1201,6 +1209,8 @@ async def accept_final_offer(caseId: str):
             }
         except Exception as e:
             print(f"❌ Settlement generation error: {e}")
+            import traceback
+            traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
     
     raise HTTPException(status_code=500, detail="Firebase not available")

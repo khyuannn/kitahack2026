@@ -56,8 +56,34 @@ def _clip_text(value: str, limit: int) -> str:
         return value
     return value[:limit] + "..."
 
-def _call_gemini_once(prompt: str, model_name: str) -> str:
-    """Single Gemini API call (used inside thread for timeout)."""
+
+def _call_gemini_once(prompt: str, model_name: str, file_parts: Optional[List[tuple]] = None) -> str:
+    """Single Gemini API call (used inside thread for timeout).
+
+    Args:
+        prompt: The text prompt
+        model_name: Gemini model ID
+        file_parts: Optional list of (file_uri, mime_type) tuples from Gemini Files API
+    """
+    if file_parts:
+        parts = [types.Part.from_text(text=prompt)]
+        for uri, mime in file_parts:
+            try:
+                parts.append(types.Part.from_uri(file_uri=uri, mime_type=mime))
+            except Exception as e:
+                print(f"⚠️  Failed to attach URI {uri[:60]}: {e}, skipping")
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[types.Content(role="user", parts=parts)],
+            )
+            return response.text
+        except Exception as e:
+            if "400" in str(e) or "INVALID_ARGUMENT" in str(e):
+                print(f"⚠️  Multipart call failed ({e}), falling back to text-only")
+                # Fall through to text-only call below
+            else:
+                raise
     response = client.models.generate_content(
         model=model_name,
         contents=prompt
@@ -65,7 +91,7 @@ def _call_gemini_once(prompt: str, model_name: str) -> str:
     return response.text
 
 
-def call_gemini_with_retry(prompt: str, max_retries: int = 2, per_call_timeout: int = 30, progress_callback=None) -> str:
+def call_gemini_with_retry(prompt: str, max_retries: int = 2, per_call_timeout: int = 30, progress_callback=None, file_parts: Optional[List[tuple]] = None) -> str:
     """Call Gemini API with retry + exponential backoff for rate limits.
     Each individual call is capped at per_call_timeout seconds."""
     def _emit(msg):
@@ -81,7 +107,7 @@ def call_gemini_with_retry(prompt: str, max_retries: int = 2, per_call_timeout: 
             if attempt > 0:
                 _emit(f"⏳ Retrying AI call (attempt {attempt+1}/{max_retries})...")
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = pool.submit(_call_gemini_once, prompt, active_model)
+            future = pool.submit(_call_gemini_once, prompt, active_model, file_parts)
             try:
                 return future.result(timeout=per_call_timeout)
             finally:
@@ -318,28 +344,33 @@ def run_negotiation_turn(
         print(f"\n{'='*60}")
         print(f"🎮 [Round {derived_round}] AI vs AI turn for case {case_id}")
         print(f"   Commander directive: {user_message[:80] if user_message else '(none)'}")
+        print(f"   Evidence URIs: {len(evidence_uris) if evidence_uris else 0}")
         print(f"{'='*60}")
         
-        # Get evidence context
+        # Get evidence context + file parts for Gemini multipart
         evidence_docs = case_ref.collection("evidence").stream()
         evidence_texts = []
+        evidence_file_parts = []  # (file_uri, mime_type) tuples for Gemini
         for edoc in evidence_docs:
             evidence_data = edoc.to_dict()
             extracted = evidence_data.get("extractedText")
             if extracted:
                 evidence_texts.append(extracted)
-        
+            # Collect Gemini File API URIs with their mime types
+            furi = evidence_data.get("file_uri")
+            fmime = evidence_data.get("fileType")
+            if furi and fmime:
+                evidence_file_parts.append((furi, fmime))
+
         # Keep prompt size bounded to reduce model timeouts/failures
         clipped_evidence = [_clip_text(text, 700) for text in evidence_texts[:8] if text]
         evidence_context = "\n".join(clipped_evidence) if clipped_evidence else "No evidence provided."
-        evidence_uri_context = ""
-        if evidence_uris:
-            trimmed_uris = evidence_uris[:5]
-            evidence_uri_context = "\nAttached Evidence File URIs:\n" + "\n".join([f"- {uri}" for uri in trimmed_uris])
         case_facts = f"Case Type: {case_type}\nTitle: {case_title}\nEvidence Summary: {evidence_context}"
-        if evidence_uri_context:
-            case_facts += evidence_uri_context
-        
+
+        # Cap file parts at 5 to avoid oversized requests
+        evidence_file_parts = evidence_file_parts[:5] if evidence_file_parts else None
+        print(f"   Evidence file parts: {len(evidence_file_parts) if evidence_file_parts else 0}")
+
         # =====================================================================
         # Step 2: Save user directive (if provided)
         # =====================================================================
@@ -474,7 +505,7 @@ def run_negotiation_turn(
         # Include commander directive as extra guidance
         directive_section = ""
         if user_message and user_message.strip():
-            directive_section = f"\n[COMMANDER DIRECTIVE]: The user wants you to: {user_message.strip()}\nIncorporate this strategic direction into your argument."
+            directive_section = f"\n\n[COMMANDER DIRECTIVE — MUST FOLLOW]: {user_message.strip()}\nThis is a direct order from the user commanding you. You MUST follow this directive exactly. If the user specifies a counter-offer amount (e.g. 'offer 1500'), you MUST use that exact amount as your counter_offer_rm unless it violates your floor price. The user's strategy overrides your own judgement."
     
         full_plaintiff_prompt = f"""{plaintiff_prompt}
 
@@ -502,6 +533,7 @@ Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
                 2,
                 30,
                 progress_callback,
+                evidence_file_parts,
             )
             try:
                 raw_plaintiff = plaintiff_future.result(timeout=90)
@@ -618,6 +650,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
                 2,
                 30,
                 progress_callback,
+                evidence_file_parts,
             )
             try:
                 raw_response = defender_future.result(timeout=90)
@@ -681,42 +714,49 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "createdAt": firestore.SERVER_TIMESTAMP,
         })[1]
         
+        # Add defendant response to history so chips reflect the latest exchange
+        history.append({
+            "role": "defendant",
+            "content": agent_text,
+            "round": derived_round,
+        })
+
         # Auditor validation
         emit("auditor", "Validating legal citations...")
         print(f"🛡️  [Auditor] Validating...")
         audit_result = validate_turn(agent_text)
         auditor_passed = audit_result["is_valid"]
-        
+
         if not auditor_passed:
             auditor_warning = audit_result.get("auditor_warning", "Citation validation failed")
             print(f"❌ [Auditor] Failed: {auditor_warning}")
             emit("auditor_warn", f"⚠ Audit failed: {auditor_warning[:80]}")
         else:
             print(f"✅ [Auditor] Validation passed")
-            
+
         # Update Firestore with audit results
         defendant_msg_ref.update({
             "auditor_passed": auditor_passed,
             "auditor_warning": auditor_warning if not auditor_passed else None,
         })
-        
+
         # =====================================================================
         # Step 8: Determine game state
         # =====================================================================
         game_state = "active"
-        
+
         if game_eval.get("meets_floor"):
             game_state = "settled"
             case_ref.update({"status": "done"})
             print(f"🎉 Settlement reached! Offer ({counter_offer}) meets floor ({floor_price})")
-        
+
         if derived_round >= MAX_ROUNDS:
             if game_state != "settled":
                 game_state = "pending_decision"
                 print(f"⏰ Max rounds reached. Awaiting user decision...")
-        
+
         # =====================================================================
-        # Step 9: Generate chips (skip if game ending)
+        # Step 9: Generate chips (sequential — avoids Gemini rate limits)
         # =====================================================================
         chips = None
         if game_state == "active":
@@ -846,23 +886,40 @@ def generate_mediator_settlement(case_id: str) -> Dict[str, Any]:
         conversation_history = []
         for msg_doc in messages:
             msg_data = msg_doc.to_dict()
+            role = msg_data.get('role') or 'unknown'
+            content = msg_data.get('content') or ''
             conversation_history.append(
-                f"[Round {msg_data.get('round')}] {msg_data.get('role').upper()}: {msg_data.get('content')}"
+                f"[Round {msg_data.get('round')}] {role.upper()}: {content}"
             )
-        
+
         history_text = "\n".join(conversation_history)
-        
+
         # Get legal context
-        legal_docs = retrieve_law(case_title, use_agentic=False)
+        legal_docs = retrieve_law(case_title or "dispute", use_agentic=False)
         legal_context = "\n".join([
             f"- {doc['law']} Section {doc['section']}: {doc['excerpt'][:200]}"
             for doc in legal_docs
         ])
-        
-        # Build mediator prompt
+
+        # Get evidence summary
+        evidence_docs = case_ref.collection("evidence").stream()
+        evidence_texts = []
+        for edoc in evidence_docs:
+            edata = edoc.to_dict()
+            extracted = edata.get("extractedText")
+            if extracted:
+                evidence_texts.append(_clip_text(extracted, 500))
+        evidence_summary = "\n".join(evidence_texts[:6]) if evidence_texts else "No evidence provided."
+
+        # Build mediator prompt with full case data
+        claim_amount = case_data.get("amount", 0) or 0
         case_data_dict = {
             "legal_context": legal_context,
-            "case_title": case_title,
+            "case_title": case_title or "Dispute",
+            "case_type": case_data.get("caseType", ""),
+            "dispute_amount": claim_amount,
+            "evidence_summary": evidence_summary,
+            "floor_price": case_data.get("floorPrice", 0) or 0,
         }
         mediator_prompt = build_mediator_prompt(
             case_data=case_data_dict,
@@ -893,14 +950,16 @@ def generate_mediator_settlement(case_id: str) -> Dict[str, Any]:
             return settlement_json
             
         except json.JSONDecodeError:
-            print(f"❌ Failed to parse mediator JSON")
+            print(f"❌ Failed to parse mediator JSON, raw: {raw_response[:300]}")
             # Return fallback settlement
-            return {
-                "summary": "Unable to generate settlement. Please consult a legal professional.",
+            fallback = {
+                "summary": raw_response[:500] if raw_response else "Unable to generate settlement. Please consult a legal professional.",
                 "recommended_settlement_rm": 0,
                 "confidence": 0.0,
                 "citations": []
             }
+            case_ref.update({"status": "done", "settlement": fallback})
+            return fallback
     
     except Exception as e:
         print(f"❌ Mediator settlement error: {str(e)}")
@@ -971,26 +1030,30 @@ def run_pvp_negotiation_turn(
         print(f"\n{'='*60}")
         print(f"🎮 [PvP Round {pvp_round}] {user_role.upper()} turn for case {case_id}")
         print(f"   Commander directive: {user_message[:80] if user_message else '(none)'}")
+        print(f"   Evidence URIs: {len(evidence_uris) if evidence_uris else 0}")
         print(f"{'='*60}")
 
-        # Get evidence context
+        # Get evidence context + file parts for Gemini multipart
         evidence_docs = case_ref.collection("evidence").stream()
         evidence_texts = []
+        evidence_file_parts = []  # (file_uri, mime_type) tuples for Gemini
         for edoc in evidence_docs:
             evidence_data = edoc.to_dict()
             extracted = evidence_data.get("extractedText")
             if extracted:
                 evidence_texts.append(extracted)
+            furi = evidence_data.get("file_uri")
+            fmime = evidence_data.get("fileType")
+            if furi and fmime:
+                evidence_file_parts.append((furi, fmime))
 
         clipped_evidence = [_clip_text(text, 700) for text in evidence_texts[:8] if text]
         evidence_context = "\n".join(clipped_evidence) if clipped_evidence else "No evidence provided."
-        evidence_uri_context = ""
-        if evidence_uris:
-            trimmed_uris = evidence_uris[:5]
-            evidence_uri_context = "\nAttached Evidence File URIs:\n" + "\n".join([f"- {uri}" for uri in trimmed_uris])
         case_facts = f"Case Type: {case_type}\nTitle: {case_title}\nEvidence Summary: {evidence_context}"
-        if evidence_uri_context:
-            case_facts += evidence_uri_context
+
+        # Cap file parts at 5 to avoid oversized requests
+        evidence_file_parts = evidence_file_parts[:5] if evidence_file_parts else None
+        print(f"   Evidence file parts: {len(evidence_file_parts) if evidence_file_parts else 0}")
 
         # =====================================================================
         # Step 2: Save user directive
@@ -1081,7 +1144,7 @@ def run_pvp_negotiation_turn(
             )
             directive_section = ""
             if user_message and user_message.strip():
-                directive_section = f"\n[COMMANDER DIRECTIVE]: The user wants you to: {user_message.strip()}\nIncorporate this strategic direction into your argument."
+                directive_section = f"\n\n[COMMANDER DIRECTIVE — MUST FOLLOW]: {user_message.strip()}\nThis is a direct order from the user commanding you. You MUST follow this directive exactly. If the user specifies a counter-offer amount (e.g. 'offer 1500'), you MUST use that exact amount as your counter_offer_rm unless it violates your floor price. The user's strategy overrides your own judgement."
 
             full_prompt = f"""{plaintiff_prompt}
 
@@ -1104,7 +1167,7 @@ Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
             )
             directive_section = ""
             if user_message and user_message.strip():
-                directive_section = f"\n[COMMANDER DIRECTIVE]: The user wants you to: {user_message.strip()}\nIncorporate this strategic direction into your defense."
+                directive_section = f"\n\n[COMMANDER DIRECTIVE — MUST FOLLOW]: {user_message.strip()}\nThis is a direct order from the user commanding you. You MUST follow this directive exactly. If the user specifies a counter-offer amount (e.g. 'offer 1500'), you MUST use that exact amount as your counter_offer_rm unless it violates your maximum offer. The user's strategy overrides your own judgement."
 
             # Get last plaintiff message for context
             last_plaintiff = next((m for m in reversed(history) if m["role"] == "plaintiff"), None)
@@ -1126,7 +1189,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         try:
             gen_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             gen_future = gen_executor.submit(
-                call_gemini_with_retry, full_prompt, 2, 30, progress_callback
+                call_gemini_with_retry, full_prompt, 2, 30, progress_callback, evidence_file_parts
             )
             try:
                 raw_response = gen_future.result(timeout=90)
@@ -1172,6 +1235,21 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "createdAt": firestore.SERVER_TIMESTAMP,
         })[1]
 
+        # =====================================================================
+        # Step 7: Determine turn flip + round advancement
+        # =====================================================================
+        opposite_role = "defendant" if user_role == "plaintiff" else "plaintiff"
+
+        # After plaintiff submits → turn goes to defendant (same round)
+        # After defendant submits → round advances, turn goes to plaintiff
+        if user_role == "plaintiff":
+            next_turn = "defendant"
+            next_round = pvp_round
+        else:
+            next_round = pvp_round + 1
+            next_turn = "plaintiff"
+
+        # Auditor validation
         emit("auditor", f"Validating {user_role} legal citations...")
         audit_result = validate_turn(agent_text)
         auditor_passed = audit_result["is_valid"]
@@ -1187,30 +1265,13 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         })
 
         # =====================================================================
-        # Step 7: Determine turn flip + round advancement
-        # =====================================================================
-        opposite_role = "defendant" if user_role == "plaintiff" else "plaintiff"
-
-        # Check if the round should advance (both sides have submitted for current round)
-        # After plaintiff submits → turn goes to defendant (same round)
-        # After defendant submits → round advances, turn goes to plaintiff
-        if user_role == "plaintiff":
-            # Plaintiff just went, defendant's turn next (same round)
-            next_turn = "defendant"
-            next_round = pvp_round
-        else:
-            # Defendant just went, advance round, plaintiff's turn next
-            next_round = pvp_round + 1
-            next_turn = "plaintiff"
-
-        # =====================================================================
         # Step 8: Inject mediator after round 2 completes (both sides done)
         # =====================================================================
         mediator_already_injected = any(m.get("role") == "mediator" for m in history)
         if user_role == "defendant" and pvp_round == 2 and not mediator_already_injected:
             emit("mediator", "⚖️ Mediator is reviewing the case...")
-            updated_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
-            inject_mediator_guidance(case_id, case_data_dict, updated_history)
+            mediator_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
+            inject_mediator_guidance(case_id, case_data_dict, mediator_history)
 
         # =====================================================================
         # Step 9: Evaluate game state
@@ -1235,7 +1296,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             case_status = "pending_decision"
 
         # =====================================================================
-        # Step 10: Generate chips for the NEXT player
+        # Step 10: Generate chips for the NEXT player (sequential)
         # =====================================================================
         chips = None
         if game_state == "active":
@@ -1246,7 +1307,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
                 counter_offer=counter_offer,
                 history=updated_history,
                 progress_callback=progress_callback,
-                role=next_turn,  # Generate chips for the next player's role
+                role=next_turn,
             )
 
         # =====================================================================

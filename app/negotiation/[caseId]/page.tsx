@@ -444,7 +444,10 @@ function NegotiationPage() {
       const res = await fetch(`/api/cases/${caseId}/accept-offer`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error("Accept failed");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Accept failed (${res.status})`);
+      }
       setGameState("settled");
       setShowDecision(false);
     } catch (err: any) {
@@ -460,7 +463,10 @@ function NegotiationPage() {
       const res = await fetch(`/api/cases/${caseId}/reject-offer`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error("Reject failed");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Reject failed (${res.status})`);
+      }
       setGameState("deadlock");
       setShowDecision(false);
     } catch (err: any) {
@@ -476,7 +482,10 @@ function NegotiationPage() {
       const res = await fetch(`/api/cases/${caseId}/export-pdf`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error("Export failed");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Export failed (${res.status})`);
+      }
       const data = await res.json();
       // Open in new window for printing
       const printWindow = window.open("", "_blank");
