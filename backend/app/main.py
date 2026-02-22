@@ -541,6 +541,8 @@ async def pvp_turn(caseId: str, request: PvpTurnRequest):
     case_status = case_data.get("status", "")
     if case_status == "done" and case_data.get("game_state") in ("settled", "deadlock"):
         raise HTTPException(status_code=400, detail="Case already completed")
+    if case_status == "pending_decision" or case_data.get("game_state") == "pending_decision":
+        raise HTTPException(status_code=400, detail="Final offer decision pending. Plaintiff must accept or reject.")
 
     # Use streaming NDJSON (same pattern as AI mode)
     progress_queue = queue.Queue()

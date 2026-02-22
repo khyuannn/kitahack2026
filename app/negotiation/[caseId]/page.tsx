@@ -270,6 +270,29 @@ function NegotiationPage() {
 
   /* ── Round is now derived from backend response, not messages ── */
 
+  /* ── Sync state from case document (important for PvP cross-client updates) ── */
+  useEffect(() => {
+    if (!caseData) return;
+
+    if (typeof caseData.pvpRound === "number") {
+      setCurrentRound(caseData.pvpRound);
+    }
+
+    const stateFromCase =
+      caseData.game_state ||
+      (caseData.status === "done"
+        ? "settled"
+        : caseData.status === "deadlock"
+        ? "deadlock"
+        : caseData.status === "pending_decision"
+        ? "pending_decision"
+        : null);
+
+    if (stateFromCase) {
+      setGameState(stateFromCase);
+    }
+  }, [caseData]);
+
   /* ── Auto-scroll ── */
   useEffect(() => {
     if (chatBoxRef.current) {
@@ -283,9 +306,11 @@ function NegotiationPage() {
   /* ── Handle game_state changes ── */
   useEffect(() => {
     if (gameState === "pending_decision") {
-      setShowDecision(true);
+      setShowDecision(!isPvp || userRole === "plaintiff");
+      return;
     }
-  }, [gameState]);
+    setShowDecision(false);
+  }, [gameState, isPvp, userRole]);
 
   /* ── Track mediator appearance for chip gating ── */
   useEffect(() => {
@@ -710,8 +735,11 @@ function NegotiationPage() {
             <h1 className="font-display text-lg font-bold text-black truncate">
               {caseData?.title || "Negotiation"}
             </h1>
-            <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
-              Round {isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound} &middot;{" "}
+            <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider">
+              <span className="text-sm text-gray-700">
+                Round {isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound}
+              </span>{" "}
+              &middot; {" "}
               {isSettled ? "Settled" : isDeadlock ? "Deadlock" : isPvp ? `${userRole === "plaintiff" ? "Plaintiff" : "Defendant"}` : "Active"}
               {isPvp && isActive && (
                 <span className={isMyTurn ? "text-green-600" : "text-amber-500"}>

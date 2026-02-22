@@ -1228,6 +1228,12 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
                 next_round = MAX_ROUNDS
                 print(f"⏰ Max rounds reached. Awaiting user decision...")
 
+        case_status = "active"
+        if game_state == "settled":
+            case_status = "done"
+        elif game_state == "pending_decision":
+            case_status = "pending_decision"
+
         # =====================================================================
         # Step 10: Generate chips for the NEXT player
         # =====================================================================
@@ -1250,6 +1256,8 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "currentTurn": next_turn,
             "turnStatus": "waiting",
             "pvpRound": next_round,
+            "status": case_status,
+            "game_state": game_state,
         })
 
         emit("complete", "Turn complete!")
