@@ -60,10 +60,10 @@ export default function SelectDisputeTypePage() {
   };
 
   return (
-    <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-12">
+    <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-40">
       {/* Header */}
       <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
-        <div className="max-w-md md:max-w-2xl lg:max-w-4xl mx-auto px-6 py-4 flex items-center gap-4">
+        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
           <div className="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
             <span className="material-icons-round text-white text-2xl">balance</span>
           </div>
@@ -71,7 +71,7 @@ export default function SelectDisputeTypePage() {
         </div>
       </header>
 
-      <main className="max-w-md md:max-w-2xl lg:max-w-4xl mx-auto px-6 py-8">
+      <main className="max-w-5xl mx-auto px-6 py-8">
         {/* Step indicator */}
         <div className="flex items-center gap-2 mb-4">
           <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded">Step 1</span>
@@ -91,10 +91,10 @@ export default function SelectDisputeTypePage() {
               onClick={() => type.enabled && setSelected(type.id)}
               className={`bg-white rounded-2xl p-6 shadow-sm relative overflow-hidden cursor-pointer transition-all ${
                 !type.enabled
-                  ? "bg-transparent border-2 border-dashed border-gray-200 opacity-70 cursor-not-allowed"
+                  ? "bg-transparent border border-dashed border-gray-200 opacity-70 cursor-not-allowed"
                   : selected === type.id
-                  ? "border-2 border-blue-600"
-                  : "border border-gray-200 hover:border-blue-300"
+                  ? "border border-blue-500"
+                  : "border border-gray-100 hover:border-gray-200"
               }`}
             >
               <div className="flex justify-between items-start mb-4">
@@ -142,26 +142,28 @@ export default function SelectDisputeTypePage() {
           </div>
         </div>
 
-        {/* Continue Button */}
-        <button
-          onClick={handleContinue}
-          className="w-full bg-[#1E293B] hover:bg-slate-800 text-white font-semibold py-4 px-6 rounded-lg mt-8 flex items-center justify-center gap-2 shadow-lg transition-colors group"
-        >
-          <span className="text-lg">Initialize Case</span>
-          <span className="material-icons-round group-hover:translate-x-1 transition-transform">
-            arrow_forward
-          </span>
-        </button>
-
-        {/* Footer */}
-        <div className="mt-8 text-center space-y-4">
-          <div className="flex justify-center gap-6 text-[11px] font-medium text-gray-400">
-            <a className="hover:text-gray-600" href="#">Privacy Policy</a>
-            <a className="hover:text-gray-600" href="#">Terms of Service</a>
-          </div>
-          <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
-        </div>
       </main>
+
+      <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-100 bg-white/95 backdrop-blur-sm">
+        <div className="max-w-5xl mx-auto px-6 py-4">
+          <button
+            onClick={handleContinue}
+            className="w-full bg-[#1E293B] hover:bg-slate-800 text-white font-semibold py-3.5 px-6 rounded-lg flex items-center justify-center gap-2 shadow-sm transition-colors group"
+          >
+            <span className="text-base">Initialize Case</span>
+            <span className="material-icons-round group-hover:translate-x-1 transition-transform">
+              arrow_forward
+            </span>
+          </button>
+          <div className="mt-3 text-center space-y-2">
+            <div className="flex justify-center gap-6 text-[11px] font-medium text-gray-400">
+              <a className="hover:text-gray-600" href="#">Privacy Policy</a>
+              <a className="hover:text-gray-600" href="#">Terms of Service</a>
+            </div>
+            <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

@@ -15,7 +15,7 @@ export default function EvidenceModal({
   onValidated,
   caseId,
 }: EvidenceModalProps) {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [userClaim, setUserClaim] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,63 +24,74 @@ export default function EvidenceModal({
   if (!isOpen) return null;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0];
-    if (!selected) return;
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length === 0) return;
 
-    if (selected.size > 5 * 1024 * 1024) {
-      alert("File must be ≤ 5MB");
-      return;
+    const allowedTypes = ["image/jpeg", "image/png", "application/pdf"];
+    const validFiles: File[] = [];
+
+    for (const selected of selectedFiles) {
+      if (selected.size > 5 * 1024 * 1024) {
+        setError("Each file must be ≤ 5MB.");
+        continue;
+      }
+      if (!allowedTypes.includes(selected.type)) {
+        setError("Only JPG, PNG, or PDF allowed.");
+        continue;
+      }
+      validFiles.push(selected);
     }
 
-    const allowedTypes = [
-      "image/jpeg",
-      "image/png",
-      "application/pdf",
-    ];
-
-    if (!allowedTypes.includes(selected.type)) {
-      setError("Only JPG, PNG, or PDF allowed.");
-      return;
+    if (validFiles.length > 0) {
+      setError(null);
+      setFiles((prev) => {
+        const existing = new Set(prev.map((f) => `${f.name}-${f.size}`));
+        const fresh = validFiles.filter((f) => !existing.has(`${f.name}-${f.size}`));
+        return [...prev, ...fresh];
+      });
     }
+  };
 
-    setError(null);
-    setFile(selected);
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
 
     setLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("user_claim", userClaim || `Evidence: ${file.name}`);
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("user_claim", userClaim || `Evidence: ${file.name}`);
 
-      const res = await fetch(`/api/cases/${caseId}/upload-evidence`, {
-        method: "POST",
-        body: formData,
-      });
+        const res = await fetch(`/api/cases/${caseId}/upload-evidence`, {
+          method: "POST",
+          body: formData,
+        });
 
-      // Read as text first to avoid JSON parse errors on non-JSON responses
-      const text = await res.text();
-      let data: any;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        if (!res.ok) throw new Error(text || `Upload failed (HTTP ${res.status})`);
-        throw new Error("Unexpected response from server");
+        const text = await res.text();
+        let data: any;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          if (!res.ok) throw new Error(text || `Upload failed (HTTP ${res.status})`);
+          throw new Error("Unexpected response from server");
+        }
+
+        if (!res.ok) {
+          throw new Error(data.detail || "Validation failed");
+        }
+
+        onValidated(data.file_uri, file.name, file.type);
       }
 
-      if (!res.ok) {
-        throw new Error(data.detail || "Validation failed");
-      }
-
-      onValidated(data.file_uri, file.name, file.type);
       setSuccess(true);
       // Show success for 1.5s then close
       setTimeout(() => {
-        setFile(null);
+        setFiles([]);
         setUserClaim("");
         setSuccess(false);
         onClose();
@@ -101,11 +112,29 @@ export default function EvidenceModal({
         <input
           type="file"
           accept=".jpg,.jpeg,.png,.pdf"
+          multiple
           onChange={handleFileChange}
           className="mb-3 w-full text-sm"
         />
 
-        {file && (
+        {files.length > 0 && (
+          <div className="mb-3 space-y-2">
+            {files.map((file, index) => (
+              <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                <p className="text-xs text-gray-600 truncate pr-3">{file.name}</p>
+                <button
+                  onClick={() => removeFile(index)}
+                  className="text-gray-400 hover:text-gray-600"
+                  title="Remove file"
+                >
+                  <span className="material-icons" style={{ fontSize: 16 }}>close</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {files.length > 0 && (
           <input
             type="text"
             value={userClaim}
@@ -128,14 +157,14 @@ export default function EvidenceModal({
 
         <div className="flex justify-end gap-3 mt-4">
           <button
-            onClick={() => { setFile(null); setError(null); setUserClaim(""); onClose(); }}
+            onClick={() => { setFiles([]); setError(null); setUserClaim(""); onClose(); }}
             className="px-4 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={handleUpload}
-            disabled={loading || !file}
+            disabled={loading || files.length === 0}
             className="px-4 py-2 bg-[#1a2a3a] text-white rounded-lg text-sm hover:bg-[#243447] transition-colors disabled:opacity-50"
           >
             {loading ? "Validating..." : "Upload & Validate"}

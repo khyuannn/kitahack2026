@@ -24,19 +24,19 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
     const gap = plPct - defPct;
     const gapColor =
       gap <= 0
-        ? "bg-green-400/40"
+        ? "bg-gradient-to-r from-emerald-300/70 to-green-500/70"
         : gap < 30
-        ? "bg-yellow-400/40"
-        : "bg-red-400/40";
+        ? "bg-gradient-to-r from-amber-300/70 to-yellow-500/70"
+        : "bg-gradient-to-r from-rose-300/70 to-red-500/70";
 
     return (
-      <div className="w-full space-y-2">
+      <div className="w-full space-y-2.5">
         {/* Bar */}
-        <div className="relative w-full h-3 bg-gray-200 rounded-full overflow-visible">
+        <div className="relative w-full h-4 bg-gradient-to-r from-blue-100 via-violet-100 to-pink-100 rounded-full border border-indigo-100 overflow-visible shadow-inner">
           {/* Gap fill between markers */}
           {defPct < plPct && (
             <div
-              className={`absolute top-0 h-full ${gapColor} transition-all duration-500 ease-out`}
+              className={`absolute top-0 h-full ${gapColor} transition-all duration-500 ease-out rounded-full`}
               style={{
                 left: `${defPct}%`,
                 width: `${plPct - defPct}%`,
@@ -46,7 +46,7 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
           {/* Overlap fill (settlement zone) */}
           {defPct >= plPct && (
             <div
-              className="absolute top-0 h-full bg-green-400/50 transition-all duration-500 ease-out"
+              className="absolute top-0 h-full bg-gradient-to-r from-emerald-400/80 to-green-500/80 transition-all duration-500 ease-out rounded-full"
               style={{
                 left: `${plPct}%`,
                 width: `${defPct - plPct}%`,
@@ -60,7 +60,7 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
               className="absolute top-1/2 -translate-y-1/2 transition-all duration-500 ease-out"
               style={{ left: `${defPct}%` }}
             >
-              <div className="w-4 h-4 -ml-2 rounded-full bg-blue-500 border-2 border-white shadow-md" />
+              <div className="w-5 h-5 -ml-2.5 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600 border-2 border-white shadow-lg ring-2 ring-cyan-200" />
             </div>
           )}
 
@@ -70,29 +70,29 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
               className="absolute top-1/2 -translate-y-1/2 transition-all duration-500 ease-out"
               style={{ left: `${plPct}%` }}
             >
-              <div className="w-4 h-4 -ml-2 rounded-full bg-gray-800 border-2 border-white shadow-md" />
+              <div className="w-5 h-5 -ml-2.5 rounded-full bg-gradient-to-br from-fuchsia-500 to-rose-600 border-2 border-white shadow-lg ring-2 ring-rose-200" />
             </div>
           )}
         </div>
 
         {/* Labels */}
-        <div className="flex justify-between items-center text-[9px] font-bold">
+        <div className="flex justify-between items-center text-[10px] font-bold">
           <div className="flex items-center gap-1">
-            <div className="w-2 h-2 rounded-full bg-blue-500" />
-            <span className="text-blue-600">
+            <div className="w-2.5 h-2.5 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600" />
+            <span className="text-blue-700">
               {defendantOffer != null ? `RM ${defendantOffer.toLocaleString()}` : "—"}
             </span>
-            <span className="text-gray-400 ml-0.5">Def.</span>
+            <span className="text-gray-400 ml-0.5 uppercase tracking-wide">Def.</span>
           </div>
-          <span className="text-gray-400">
+          <span className="text-gray-500 font-semibold">
             RM 0 — RM {maxAmount.toLocaleString()}
           </span>
           <div className="flex items-center gap-1">
-            <span className="text-gray-400 mr-0.5">Plt.</span>
-            <span className="text-gray-700">
+            <span className="text-gray-400 mr-0.5 uppercase tracking-wide">Plt.</span>
+            <span className="text-gray-800">
               {plaintiffOffer != null ? `RM ${plaintiffOffer.toLocaleString()}` : "—"}
             </span>
-            <div className="w-2 h-2 rounded-full bg-gray-800" />
+            <div className="w-2.5 h-2.5 rounded-full bg-gradient-to-br from-fuchsia-500 to-rose-600" />
           </div>
         </div>
       </div>

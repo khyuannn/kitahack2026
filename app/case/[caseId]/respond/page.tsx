@@ -30,7 +30,8 @@ interface EvidenceDoc {
 export default function DefendantRespondPage() {
   const params = useParams();
   const router = useRouter();
-  const caseId = params.caseId as string;
+  const rawCaseId = params.caseId;
+  const caseId = Array.isArray(rawCaseId) ? rawCaseId[0] : (rawCaseId as string | undefined);
 
   const {
     uid,
@@ -128,6 +129,29 @@ export default function DefendantRespondPage() {
 
   const handleSubmit = async () => {
     if (submitting) return;
+    if (!caseId) {
+      setError("Invalid case link. Please open the invite link again.");
+      return;
+    }
+
+    const backendBaseUrl =
+      process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
+      (typeof window !== "undefined" && window.location.hostname === "localhost"
+        ? "http://127.0.0.1:8005"
+        : "");
+
+    const uploadEvidenceUrl = backendBaseUrl
+      ? `${backendBaseUrl}/api/cases/${caseId}/upload-evidence`
+      : `/api/cases/${caseId}/upload-evidence`;
+
+    const defendantRespondUrl = backendBaseUrl
+      ? `${backendBaseUrl}/api/cases/${caseId}/defendant-respond`
+      : `/api/cases/${caseId}/defendant-respond`;
+
+    const joinUrl = backendBaseUrl
+      ? `${backendBaseUrl}/api/cases/${caseId}/join`
+      : `/api/cases/${caseId}/join`;
+
     setSubmitting(true);
     setError(null);
 
@@ -149,7 +173,7 @@ export default function DefendantRespondPage() {
         );
 
         const uploadRes = await fetch(
-          `/api/cases/${caseId}/upload-evidence`,
+          uploadEvidenceUrl,
           { method: "POST", body: formData }
         );
 
@@ -160,7 +184,7 @@ export default function DefendantRespondPage() {
       }
 
       // Submit defendant response
-      const res = await fetch(`/api/cases/${caseId}/defendant-respond`, {
+      let res = await fetch(defendantRespondUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -175,13 +199,39 @@ export default function DefendantRespondPage() {
         }),
       });
 
+      if (res.status === 404) {
+        res = await fetch(joinUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: currentUid,
+            role: "defendant",
+            isAnonymous: true,
+            displayName: "Anonymous Defendant",
+          }),
+        });
+      }
+
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Failed to submit response");
       }
 
+      const responseData = await res.json().catch(() => ({}));
+      const nextCaseId = responseData.caseId || caseId;
+
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(
+          `pendingDefendantOpening:${nextCaseId}`,
+          JSON.stringify({
+            content: defendantDescription.trim(),
+            offer: startingOffer ? Number(startingOffer) : null,
+          })
+        );
+      }
+
       // Redirect to negotiation
-      router.replace(`/negotiation/${caseId}?role=defendant`);
+      router.replace(`/negotiation/${nextCaseId}?role=defendant`);
     } catch (err: any) {
       setError(err.message || "Something went wrong");
     } finally {

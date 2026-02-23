@@ -150,23 +150,23 @@ export default function VerificationPage() {
   };
 
   return (
-    <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 flex justify-center">
-      <div className="w-full max-w-md md:max-w-2xl lg:max-w-3xl bg-white min-h-screen shadow-2xl relative flex flex-col">
+    <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-40">
+      <div className="w-full">
         {/* Header */}
-        <header className="px-6 py-5 border-b border-gray-200 flex items-center gap-4 bg-white sticky top-0 z-10">
+        <header className="px-6 py-5 border-b border-gray-100 flex items-center gap-4 bg-white sticky top-0 z-10">
           <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center shrink-0">
             <span className="material-icons text-white text-xl">balance</span>
           </div>
           <h1 className="font-display text-2xl font-bold text-black tracking-wide">Lex-Machina</h1>
         </header>
 
-        <main className="flex-1 px-6 pt-8 pb-12 overflow-y-auto">
+        <main className="max-w-5xl mx-auto px-6 pt-8 pb-8">
           {/* Step indicator */}
           <div className="flex items-center gap-2 mb-4">
-            <span className="bg-black text-white text-[10px] font-bold px-2 py-1 rounded tracking-wider uppercase">
+            <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded tracking-wide">
               Step 4
             </span>
-            <span className="text-xs font-medium text-text-secondary-light uppercase tracking-wide">
+            <span className="text-xs font-semibold text-gray-400 tracking-wide">
               Of 4
             </span>
           </div>
@@ -190,7 +190,7 @@ export default function VerificationPage() {
           </div>
 
           {/* Case Summary Card */}
-          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6">
+          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6 max-w-3xl">
             <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wide mb-4">
               Case Summary
             </h3>
@@ -241,7 +241,7 @@ export default function VerificationPage() {
             </h3>
 
             {files.length === 0 ? (
-              <div className="bg-gray-50 rounded-xl p-6 text-center border border-gray-100">
+              <div className="bg-gray-50 rounded-xl p-6 text-center border border-gray-100 max-w-3xl">
                 <span className="material-icons text-3xl text-gray-300 mb-2">folder_open</span>
                 <p className="text-sm text-gray-400">No evidence files uploaded</p>
               </div>
@@ -250,7 +250,7 @@ export default function VerificationPage() {
                 {files.map((file, index) => (
                   <div
                     key={index}
-                    className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100"
+                    className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100 max-w-3xl"
                   >
                     <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 shrink-0">
                       <span className="material-icons text-xl">{getFileIcon(file.name)}</span>
@@ -300,17 +300,17 @@ export default function VerificationPage() {
           )}
 
           {/* Negotiation Mode Toggle */}
-          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6">
+          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6 max-w-3xl">
             <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wide mb-4">
               Negotiation Mode
             </h3>
             <div className="space-y-3">
               <button
                 onClick={() => setNegotiationMode("ai")}
-                className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
+                className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
                   negotiationMode === "ai"
-                    ? "border-[#1a2a3a] bg-[#1a2a3a]/5"
-                    : "border-gray-200 hover:border-gray-300"
+                    ? "border-[#1a2a3a]/30 bg-[#1a2a3a]/5"
+                    : "border-gray-100 hover:border-gray-200"
                 }`}
               >
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
@@ -333,10 +333,10 @@ export default function VerificationPage() {
 
               <button
                 onClick={() => setNegotiationMode("pvp")}
-                className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-all ${
+                className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
                   negotiationMode === "pvp"
-                    ? "border-[#1a2a3a] bg-[#1a2a3a]/5"
-                    : "border-gray-200 hover:border-gray-300"
+                    ? "border-[#1a2a3a]/30 bg-[#1a2a3a]/5"
+                    : "border-gray-100 hover:border-gray-200"
                 }`}
               >
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
@@ -368,39 +368,39 @@ export default function VerificationPage() {
             )}
           </div>
 
-          {/* Start Negotiation Button */}
-          <button
-            onClick={handleStartNegotiation}
-            disabled={!allVerified || creating}
-            className={`w-full font-semibold py-4 px-6 rounded-lg mt-4 flex items-center justify-center gap-2 shadow-lg transition-all duration-200 group ${
-              !allVerified || creating
-                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                : "bg-[#1a2a3a] hover:bg-[#243447] text-white hover:shadow-xl"
-            }`}
-          >
-            <span className="text-base">
-              {creating ? "Creating Case..." : "Start Negotiation"}
-            </span>
-            {!creating && (
-              <span className="material-icons text-lg group-hover:translate-x-1 transition-transform">
-                arrow_forward
-              </span>
-            )}
-          </button>
         </main>
 
-        {/* Footer */}
-        <footer className="py-8 border-t border-transparent mt-auto bg-white">
-          <div className="flex justify-center gap-8 mb-6">
-            <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
-              Privacy Policy
-            </a>
-            <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
-              Terms of Service
-            </a>
-          </div>
-          <div className="text-center">
-            <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+        <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-100 bg-white/95 backdrop-blur-sm">
+          <div className="max-w-5xl mx-auto px-6 py-4">
+            <button
+              onClick={handleStartNegotiation}
+              disabled={!allVerified || creating}
+              className={`w-full font-semibold py-3.5 px-6 rounded-lg flex items-center justify-center gap-2 shadow-sm transition-all duration-200 group ${
+                !allVerified || creating
+                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                  : "bg-[#1a2a3a] hover:bg-[#243447] text-white"
+              }`}
+            >
+              <span className="text-base">
+                {creating ? "Creating Case..." : "Start Negotiation"}
+              </span>
+              {!creating && (
+                <span className="material-icons text-lg group-hover:translate-x-1 transition-transform">
+                  arrow_forward
+                </span>
+              )}
+            </button>
+            <div className="mt-3 flex justify-center gap-8 mb-2">
+              <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
+                Privacy Policy
+              </a>
+              <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
+                Terms of Service
+              </a>
+            </div>
+            <div className="text-center">
+              <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+            </div>
           </div>
         </footer>
       </div>

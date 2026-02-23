@@ -34,6 +34,12 @@ interface TurnResponse {
   current_turn?: string;
 }
 
+interface AttachedEvidence {
+  uri: string;
+  name: string;
+  type: string;
+}
+
 /* ── Default chips shown before first turn ── */
 const DEFAULT_CHIPS: ChipOptions = {
   question: "How should your AI agent open the negotiation?",
@@ -92,7 +98,8 @@ function NegotiationPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const caseId = params.caseId as string;
+  const rawCaseId = params.caseId;
+  const caseId = (Array.isArray(rawCaseId) ? rawCaseId[0] : rawCaseId) || "";
   const roleParam = searchParams.get("role") as "plaintiff" | "defendant" | null;
 
   const {
@@ -119,6 +126,7 @@ function NegotiationPage() {
   const [plaintiffOffer, setPlaintiffOffer] = useState<number | null>(null);
   const [defendantOffer, setDefendantOffer] = useState<number | null>(null);
   const [evidenceUris, setEvidenceUris] = useState<string[]>([]);
+  const [attachedEvidence, setAttachedEvidence] = useState<AttachedEvidence[]>([]);
 
   // Two-step chip flow: user selects a chip, then optionally types extra context
   const [selectedChip, setSelectedChip] = useState<string | null>(null);
@@ -130,6 +138,11 @@ function NegotiationPage() {
   const [showEvidence, setShowEvidence] = useState(false);
   const [inviteCopied, setInviteCopied] = useState(false);
   const [elapsedSecs, setElapsedSecs] = useState(0);
+  const [activeAudioMessageId, setActiveAudioMessageId] = useState<string | null>(null);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const activeAudioIdRef = useRef<string | null>(null);
+  const autoPlayedMessageIdsRef = useRef<Set<string>>(new Set());
 
   // PvP state
   const [userRole, setUserRole] = useState<"plaintiff" | "defendant">(roleParam || "plaintiff");
@@ -139,6 +152,7 @@ function NegotiationPage() {
   const [showEvidenceDrawer, setShowEvidenceDrawer] = useState(false);
   const [pdfPreview, setPdfPreview] = useState<{ html: string; title: string; fileName: string } | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [pendingOpeningMessage, setPendingOpeningMessage] = useState<{ content: string; offer?: number | null } | null>(null);
   const pvpJoinedRef = React.useRef(false);
 
   useEffect(() => {
@@ -161,6 +175,79 @@ function NegotiationPage() {
   const [decidingReject, setDecidingReject] = useState(false);
 
   const chatBoxRef = useRef<HTMLDivElement>(null);
+
+  const stopCurrentAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    activeAudioIdRef.current = null;
+    setActiveAudioMessageId(null);
+    setIsAudioPlaying(false);
+  }, []);
+
+  const playMessageAudio = useCallback(async (message: { id: string; audio_url?: string | null }, autoplay = false) => {
+    if (!message.audio_url) return;
+
+    if (activeAudioIdRef.current === message.id && audioRef.current) {
+      if (!audioRef.current.paused) {
+        stopCurrentAudio();
+        return;
+      }
+      try {
+        await audioRef.current.play();
+        setIsAudioPlaying(true);
+      } catch {
+        if (!autoplay) {
+          alert("Unable to play audio right now.");
+        }
+      }
+      return;
+    }
+
+    stopCurrentAudio();
+
+    const player = new Audio(message.audio_url);
+    audioRef.current = player;
+    activeAudioIdRef.current = message.id;
+    setActiveAudioMessageId(message.id);
+    setIsAudioPlaying(false);
+
+    player.onplay = () => {
+      if (activeAudioIdRef.current === message.id) {
+        setIsAudioPlaying(true);
+      }
+    };
+    player.onpause = () => {
+      if (activeAudioIdRef.current === message.id) {
+        setIsAudioPlaying(false);
+      }
+    };
+    player.onended = () => {
+      if (activeAudioIdRef.current === message.id) {
+        audioRef.current = null;
+        activeAudioIdRef.current = null;
+        setActiveAudioMessageId(null);
+        setIsAudioPlaying(false);
+      }
+    };
+
+    try {
+      await player.play();
+      setIsAudioPlaying(true);
+    } catch {
+      if (!autoplay) {
+        alert("Autoplay was blocked. Press play again to start audio.");
+      }
+      if (activeAudioIdRef.current === message.id) {
+        audioRef.current = null;
+        activeAudioIdRef.current = null;
+        setActiveAudioMessageId(null);
+        setIsAudioPlaying(false);
+      }
+    }
+  }, [stopCurrentAudio]);
 
   /* ── Load case data (real-time) ── */
   useEffect(() => {
@@ -204,58 +291,16 @@ function NegotiationPage() {
     else if (roleParam) setUserRole(roleParam);
   }, [caseData, uid, roleParam]);
 
-  /* ── PvP: Redirect defendant to onboarding if they haven't responded ── */
+  /* ── PvP: Defendants must go through response page before joining ── */
   useEffect(() => {
     if (!isPvp || roleParam !== "defendant" || !caseId || !caseData) return;
-    // If defendant hasn't responded yet and isn't already the defendant user, redirect to respond page
-    if (!caseData.defendantResponded && caseData.defendantUserId !== uid) {
+    if (!uid) return;
+
+    const joinedDefendantUid = caseData.defendantUserId;
+    if (!joinedDefendantUid || joinedDefendantUid !== uid) {
       router.replace(`/case/${caseId}/respond`);
-      return;
     }
   }, [isPvp, roleParam, caseId, caseData, uid, router]);
-
-  /* ── PvP: Auto-join for defendants (legacy — only if already responded) ── */
-  useEffect(() => {
-    if (!isPvp || roleParam !== "defendant" || !caseId) return;
-    if (pvpJoinedRef.current || pvpJoining || caseData?.defendantUserId) return;
-    // If defendant hasn't responded, the redirect above handles it
-    if (!caseData?.defendantResponded) return;
-
-    const joinCase = async () => {
-      setPvpJoining(true);
-      setPvpJoinError(null);
-      try {
-        let currentUid = uid;
-        if (!currentUid) {
-          const anonUser = await doAnonSignIn();
-          currentUid = anonUser?.uid ?? null;
-        }
-        if (!currentUid) throw new Error("Failed to authenticate");
-
-        const res = await fetch(`/api/cases/${caseId}/join`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: currentUid,
-            role: "defendant",
-            isAnonymous: true,
-            displayName: "Anonymous Defendant",
-          }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || "Failed to join case");
-        }
-        pvpJoinedRef.current = true;
-        setUserRole("defendant");
-      } catch (err: any) {
-        setPvpJoinError(err.message);
-      } finally {
-        setPvpJoining(false);
-      }
-    };
-    joinCase();
-  }, [isPvp, roleParam, caseId, uid, caseData?.defendantUserId, pvpJoining, doAnonSignIn, caseData?.defendantResponded]);
 
   /* ── PvP: Set default chips when it becomes user's turn ── */
   useEffect(() => {
@@ -329,6 +374,34 @@ function NegotiationPage() {
     }
   }, [messages]);
 
+  useEffect(() => {
+    if (!caseId || roleParam !== "defendant" || typeof window === "undefined") return;
+    const key = `pendingDefendantOpening:${caseId}`;
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as { content?: string; offer?: number | null };
+      if (parsed.content && parsed.content.trim()) {
+        setPendingOpeningMessage({
+          content: parsed.content.trim(),
+          offer: parsed.offer ?? null,
+        });
+      }
+    } catch {
+    }
+  }, [caseId, roleParam]);
+
+  useEffect(() => {
+    if (!pendingOpeningMessage || !caseId || typeof window === "undefined") return;
+    const hasRealOpening = messages.some(
+      (m) => m.role === "defendant" && m.content?.trim() === pendingOpeningMessage.content
+    );
+    if (hasRealOpening) {
+      setPendingOpeningMessage(null);
+      sessionStorage.removeItem(`pendingDefendantOpening:${caseId}`);
+    }
+  }, [messages, pendingOpeningMessage, caseId]);
+
   /* ── Auto-scroll ── */
   useEffect(() => {
     if (chatBoxRef.current) {
@@ -355,6 +428,41 @@ function NegotiationPage() {
     }
   }, [messages]);
 
+  useEffect(() => {
+    const candidate = [...messages].reverse().find((msg) => {
+      if (!msg.audio_url || autoPlayedMessageIdsRef.current.has(msg.id)) {
+        return false;
+      }
+
+      if (msg.role === "mediator") {
+        return true;
+      }
+
+      if (msg.role !== "plaintiff" && msg.role !== "defendant") {
+        return false;
+      }
+
+      if (isPvp) {
+        return msg.role !== userRole;
+      }
+
+      return msg.role === "defendant";
+    });
+
+    if (!candidate) {
+      return;
+    }
+
+    autoPlayedMessageIdsRef.current.add(candidate.id);
+    void playMessageAudio(candidate, true);
+  }, [messages, isPvp, userRole, playMessageAudio]);
+
+  useEffect(() => {
+    return () => {
+      stopCurrentAudio();
+    };
+  }, [stopCurrentAudio]);
+
   /* ── Send directive (calls /api/cases/{caseId}/next-turn or pvp-turn with streaming) ── */
   const handleSend = useCallback(
     async (message: string) => {
@@ -368,9 +476,19 @@ function NegotiationPage() {
       const timeoutId = setTimeout(() => controller.abort(), 190000);
 
       try {
-        const endpoint = isPvp
-          ? `/api/cases/${caseId}/pvp-turn`
-          : `/api/cases/${caseId}/next-turn`;
+        const backendBaseUrl =
+          process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
+          (typeof window !== "undefined" && window.location.hostname === "localhost"
+            ? "http://127.0.0.1:8005"
+            : "");
+
+        const endpoint = backendBaseUrl
+          ? (isPvp
+              ? `${backendBaseUrl}/api/cases/${caseId}/pvp-turn`
+              : `${backendBaseUrl}/api/cases/${caseId}/next-turn`)
+          : (isPvp
+              ? `/api/cases/${caseId}/pvp-turn`
+              : `/api/cases/${caseId}/next-turn`);
 
         const bodyPayload = isPvp
           ? {
@@ -484,6 +602,8 @@ function NegotiationPage() {
         setSending(false);
         setProgressStep(null);
         setInput("");
+        setEvidenceUris([]);
+        setAttachedEvidence([]);
       }
     },
     [caseId, evidenceUris, caseData, sending, isPvp, userRole, uid]
@@ -565,12 +685,24 @@ function NegotiationPage() {
 
   /* ── Evidence validated callback ── */
   const handleEvidenceValidated = (fileUri: string, fileName: string, fileType: string) => {
-    setEvidenceUris((prev) => [...prev, fileUri]);
+    setEvidenceUris((prev) => {
+      if (prev.includes(fileUri)) return prev;
+      return [...prev, fileUri];
+    });
+    setAttachedEvidence((prev) => {
+      if (prev.some((item) => item.uri === fileUri)) return prev;
+      return [...prev, { uri: fileUri, name: fileName, type: fileType }];
+    });
+  };
+
+  const removeAttachedEvidence = (uri: string) => {
+    setEvidenceUris((prev) => prev.filter((item) => item !== uri));
+    setAttachedEvidence((prev) => prev.filter((item) => item.uri !== uri));
   };
 
   /* ── Invite link ── */
   const handleCopyInvite = async () => {
-    const link = `${window.location.origin}/negotiation/${caseId}?role=defendant`;
+    const link = `${window.location.origin}/case/${caseId}/respond`;
     await navigator.clipboard.writeText(link);
     setInviteCopied(true);
     setTimeout(() => setInviteCopied(false), 2000);
@@ -581,6 +713,7 @@ function NegotiationPage() {
   const isDeadlock = gameState === "deadlock";
   const mediatorGatePassed = currentRound < 3 || mediatorShown;
   const commanderInputEnabled = isActive && mediatorGatePassed && (!isPvp || (isMyTurn && defendantJoined));
+  const currentRoundDisplay = isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound;
 
   /* ── Mediator auto-trigger (AI mode only) ── */
   useEffect(() => {
@@ -701,7 +834,7 @@ function NegotiationPage() {
                   <div className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2.5 overflow-hidden">
                     <p className="text-xs text-gray-600 truncate font-mono">
                       {typeof window !== "undefined"
-                        ? `${window.location.origin}/negotiation/${caseId}?role=defendant`
+                        ? `${window.location.origin}/case/${caseId}/respond`
                         : ""}
                     </p>
                   </div>
@@ -804,7 +937,7 @@ function NegotiationPage() {
             </h1>
             <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider">
               <span className="text-sm text-gray-700">
-                Round {isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound}
+                Round {currentRoundDisplay}
               </span>{" "}
               &middot; {" "}
               {isSettled ? "Settled" : isDeadlock ? "Deadlock" : isPvp ? `${userRole === "plaintiff" ? "Plaintiff" : "Defendant"}` : "Active"}
@@ -840,14 +973,22 @@ function NegotiationPage() {
           </div>
         </header>
 
+        <div className="px-5 pt-3 bg-white border-b border-gray-100">
+          <div className="mx-auto w-full max-w-[280px] rounded-2xl bg-gradient-to-r from-sky-50 via-indigo-50 to-blue-50 border border-indigo-100 px-4 py-2.5 text-center shadow-sm">
+            <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-[0.18em]">Current Round</p>
+            <p className="text-xl font-extrabold text-[#1a2a3a] leading-tight mt-0.5">Round {currentRoundDisplay}</p>
+          </div>
+        </div>
+
         {/* ── Settlement Meter (sticky with header) ── */}
         <div className="px-5 py-3 bg-gray-50 border-b border-gray-100">
+          <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
               Settlement Progress
             </span>
             {counterOffer != null && (
-              <span className="text-[10px] font-bold text-gray-700">
+              <span className="text-[10px] font-bold text-[#1a2a3a] bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
                 Counter: RM {counterOffer.toLocaleString()}
               </span>
             )}
@@ -857,6 +998,7 @@ function NegotiationPage() {
             plaintiffOffer={plaintiffOffer}
             defendantOffer={defendantOffer}
           />
+          </div>
         </div>
         </div>
 
@@ -896,15 +1038,68 @@ function NegotiationPage() {
             </div>
           )}
 
+          {pendingOpeningMessage && roleParam === "defendant" && (
+            <div className="flex justify-end">
+              <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-[#1a2a3a] text-white rounded-br-md">
+                <p className="text-[10px] font-bold uppercase tracking-wider mb-1 opacity-60">
+                  Your Agent
+                </p>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{pendingOpeningMessage.content}</p>
+                {pendingOpeningMessage.offer != null && (
+                  <p className="text-[10px] mt-1 opacity-80">Opening offer: RM {pendingOpeningMessage.offer.toLocaleString()}</p>
+                )}
+              </div>
+            </div>
+          )}
+
           {messages.map((msg) => {
             // Directive messages are shown as small right-aligned bubbles (matching plaintiff side)
             if (msg.role === "directive") {
+              const roleMatch = msg.content?.match(/^\[(PLAINTIFF|DEFENDANT)\]\s*/i);
+              const directiveRole = roleMatch?.[1]?.toLowerCase() as "plaintiff" | "defendant" | undefined;
+              const directiveText = roleMatch ? msg.content.replace(roleMatch[0], "") : msg.content;
+              const isMyDirective = isPvp ? directiveRole === userRole : true;
+
+              if (!isMyDirective) {
+                return null;
+              }
+
+              const questionMatch = directiveText.match(/\[Q\]\s*([\s\S]*?)\s*\[CHIP\]/i);
+              const chipMatch = directiveText.match(/\[CHIP\]\s*([\s\S]*?)\s*\[TEXT\]/i);
+              const textMatch = directiveText.match(/\[TEXT\]\s*([\s\S]*)$/i);
+              const parsedQuestion = questionMatch?.[1]?.trim();
+              const parsedChip = chipMatch?.[1]?.trim();
+              const parsedText = textMatch?.[1]?.trim();
+
               return (
                 <div key={msg.id} className="flex justify-end">
-                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-1.5 max-w-[70%]">
-                    <p className="text-[10px] text-indigo-400 font-medium italic text-right">
-                      Strategy: {msg.content}
+                  <div className="rounded-xl px-3 py-2 max-w-[85%] bg-indigo-50 border border-indigo-100">
+                    <p className="text-[10px] text-indigo-500 font-semibold uppercase tracking-wider text-right mb-1">
+                      Your Strategy
                     </p>
+                    {parsedQuestion || parsedChip || parsedText ? (
+                      <div className="space-y-1 text-right">
+                        {parsedQuestion && (
+                          <p className="text-[10px] text-indigo-500">
+                            <span className="font-semibold">Question:</span> {parsedQuestion}
+                          </p>
+                        )}
+                        {parsedChip && (
+                          <p className="text-[10px] text-indigo-600 font-semibold">
+                            <span className="font-semibold">Chip:</span> {parsedChip}
+                          </p>
+                        )}
+                        {parsedText && parsedText !== "-" && (
+                          <p className="text-[10px] text-indigo-500">
+                            <span className="font-semibold">Your text:</span> {parsedText}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-indigo-500 font-medium italic text-right">
+                        {directiveText}
+                      </p>
+                    )}
                   </div>
                 </div>
               );
@@ -936,6 +1131,28 @@ function NegotiationPage() {
                       : msg.role}
                   </p>
                   <p className={`text-sm leading-relaxed whitespace-pre-wrap ${isMediator ? "text-center" : ""}`}>{msg.content}</p>
+                  {msg.audio_url && (msg.role === "plaintiff" || msg.role === "defendant" || msg.role === "mediator") && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void playMessageAudio(msg);
+                      }}
+                      className={`mt-2 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full transition-colors ${
+                        activeAudioMessageId === msg.id && isAudioPlaying
+                          ? "bg-red-100 text-red-700"
+                          : "bg-black/10 text-current hover:bg-black/15"
+                      }`}
+                    >
+                      <span className="material-icons" style={{ fontSize: 13 }}>
+                        {activeAudioMessageId === msg.id && isAudioPlaying ? "stop" : "play_arrow"}
+                      </span>
+                      {activeAudioMessageId === msg.id && isAudioPlaying
+                        ? "Stop audio"
+                        : activeAudioMessageId === msg.id
+                        ? "Play again"
+                        : "Play audio"}
+                    </button>
+                  )}
                   {msg.round && (
                     <p className="text-[9px] mt-1.5 opacity-40">Round {msg.round}</p>
                   )}
@@ -1173,22 +1390,24 @@ function NegotiationPage() {
         {/* Gate: for round 3+, only show chips after mediator has appeared */}
         {chips && commanderInputEnabled && !sending && !selectedChip && (
           <div className="px-5 py-4 bg-gradient-to-r from-gray-50 to-indigo-50/30 border-t border-gray-100">
-            <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-0.5 text-center">
-              Strategic Decision
-            </p>
-            <p className="text-xs text-gray-600 mb-3 text-center">
-              {chips.question}
-            </p>
-            <div className="flex flex-wrap gap-2 justify-center">
-              {chips.options.map((opt) => (
-                <button
-                  key={opt.label}
-                  onClick={() => setSelectedChip(opt.label)}
-                  className="bg-white border border-indigo-200 text-gray-800 text-xs font-semibold px-4 py-2.5 rounded-full hover:bg-[#1a2a3a] hover:text-white hover:border-[#1a2a3a] transition-all shadow-sm"
-                >
-                  {opt.label}
-                </button>
-              ))}
+            <div className="rounded-2xl bg-white border border-indigo-100 p-4 shadow-sm">
+              <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-1 text-center">
+                Strategic Decision
+              </p>
+              <p className="text-sm font-semibold text-gray-800 mb-1 text-center">Question</p>
+              <p className="text-xs text-gray-600 mb-4 text-center leading-relaxed">{chips.question}</p>
+              <p className="text-sm font-semibold text-gray-800 mb-2 text-center">Choose a strategy</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {chips.options.map((opt) => (
+                  <button
+                    key={opt.label}
+                    onClick={() => setSelectedChip(opt.label)}
+                    className="bg-white border border-indigo-200 text-gray-800 text-xs font-semibold px-4 py-2.5 rounded-full hover:bg-[#1a2a3a] hover:text-white hover:border-[#1a2a3a] transition-all shadow-sm"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -1196,72 +1415,122 @@ function NegotiationPage() {
         {/* ── Selected Chip: Add optional text directive before sending ── */}
         {selectedChip && commanderInputEnabled && (
           <div className="px-5 py-4 bg-gradient-to-r from-indigo-50/40 to-gray-50 border-t border-indigo-100">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="inline-flex items-center gap-1.5 bg-[#1a2a3a] text-white text-xs font-semibold px-3 py-1.5 rounded-full">
-                <span className="material-icons" style={{ fontSize: 14 }}>psychology</span>
-                {selectedChip}
-              </span>
-              <button
-                onClick={() => setSelectedChip(null)}
-                disabled={sending}
-                className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
-                title="Change strategy"
-              >
-                <span className="material-icons" style={{ fontSize: 16 }}>close</span>
-              </button>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowEvidence(true)}
-                disabled={sending}
-                className="w-11 h-11 rounded-full bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Upload Evidence"
-              >
-                <span className="material-icons text-lg text-gray-600">attach_file</span>
-              </button>
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    const directive = input.trim()
-                      ? `${selectedChip} — ${input.trim()}`
-                      : selectedChip;
+            <div className="rounded-2xl bg-white border border-indigo-100 p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div className="flex-1 text-center">
+                  <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Selected strategy</p>
+                  <span className="inline-flex items-center gap-1.5 bg-[#1a2a3a] text-white text-xs font-semibold px-3 py-1.5 rounded-full mt-1">
+                    <span className="material-icons" style={{ fontSize: 14 }}>psychology</span>
+                    {selectedChip}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedChip(null)}
+                  disabled={sending}
+                  className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+                  title="Change strategy"
+                >
+                  <span className="material-icons" style={{ fontSize: 16 }}>close</span>
+                </button>
+              </div>
+
+              {attachedEvidence.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1.5 text-center">Attached evidence</p>
+                  <div className="flex flex-wrap gap-2 justify-center">
+                    {attachedEvidence.map((item) => {
+                      const isImage = item.type.startsWith("image/");
+                      return (
+                        <div key={item.uri} className="inline-flex items-center gap-1.5 bg-indigo-50 border border-indigo-200 text-indigo-700 text-[11px] font-medium px-2.5 py-1.5 rounded-full max-w-full">
+                          <span className="material-icons" style={{ fontSize: 14 }}>{isImage ? "image" : "description"}</span>
+                          <span className="truncate max-w-[140px]">{item.name}</span>
+                          <button
+                            onClick={() => removeAttachedEvidence(item.uri)}
+                            className="text-indigo-500 hover:text-indigo-700"
+                            title="Remove attachment"
+                          >
+                            <span className="material-icons" style={{ fontSize: 13 }}>close</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <p className="text-sm font-semibold text-gray-800 mb-2 text-center">Add message for your agent</p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowEvidence(true)}
+                  disabled={sending}
+                  className="w-11 h-11 rounded-full bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Upload Evidence"
+                >
+                  <span className="material-icons text-lg text-gray-600">attach_file</span>
+                </button>
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      const directive = `[Q] ${chips?.question || ""} [CHIP] ${selectedChip} [TEXT] ${input.trim() || "-"}`;
+                      setSelectedChip(null);
+                      handleSend(directive);
+                    }
+                  }}
+                  placeholder="Add legal instructions, amount, or tone (optional)..."
+                  disabled={sending}
+                  className="flex-1 bg-white border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
+                />
+                <button
+                  onClick={() => {
+                    const directive = `[Q] ${chips?.question || ""} [CHIP] ${selectedChip} [TEXT] ${input.trim() || "-"}`;
                     setSelectedChip(null);
                     handleSend(directive);
-                  }
-                }}
-                placeholder="Add details to your strategy (optional)..."
-                disabled={sending}
-                className="flex-1 bg-white border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
-              />
-              <button
-                onClick={() => {
-                  const directive = input.trim()
-                    ? `${selectedChip} — ${input.trim()}`
-                    : selectedChip;
-                  setSelectedChip(null);
-                  handleSend(directive);
-                }}
-                disabled={sending}
-                className="w-11 h-11 bg-[#1a2a3a] text-white rounded-full flex items-center justify-center hover:bg-[#243447] transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-              >
-                <span className="material-icons text-lg">
-                  {sending ? "hourglass_empty" : "send"}
-                </span>
-              </button>
+                  }}
+                  disabled={sending}
+                  className="w-11 h-11 bg-[#1a2a3a] text-white rounded-full flex items-center justify-center hover:bg-[#243447] transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                >
+                  <span className="material-icons text-lg">
+                    {sending ? "hourglass_empty" : "send"}
+                  </span>
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-2 text-center">
+                1) Choose strategy  2) Add details  3) Review evidence tabs  4) Send
+              </p>
             </div>
-            <p className="text-[10px] text-gray-400 mt-2 text-center">
-              Press Enter or click the send button to proceed with this strategy
-            </p>
           </div>
         )}
 
         {/* ── Input Bar (hidden when chip is selected — chip panel has its own input) ── */}
         {commanderInputEnabled && !selectedChip && (
           <div className="px-4 py-3 border-t border-gray-100 bg-white sticky bottom-0">
+            {attachedEvidence.length > 0 && (
+              <div className="mb-2">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Attached evidence</p>
+                <div className="flex flex-wrap gap-2">
+                  {attachedEvidence.map((item) => {
+                    const isImage = item.type.startsWith("image/");
+                    return (
+                      <div key={item.uri} className="inline-flex items-center gap-1.5 bg-indigo-50 border border-indigo-200 text-indigo-700 text-[11px] font-medium px-2.5 py-1.5 rounded-full max-w-full">
+                        <span className="material-icons" style={{ fontSize: 14 }}>{isImage ? "image" : "description"}</span>
+                        <span className="truncate max-w-[140px]">{item.name}</span>
+                        <button
+                          onClick={() => removeAttachedEvidence(item.uri)}
+                          className="text-indigo-500 hover:text-indigo-700"
+                          title="Remove attachment"
+                        >
+                          <span className="material-icons" style={{ fontSize: 13 }}>close</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowEvidence(true)}

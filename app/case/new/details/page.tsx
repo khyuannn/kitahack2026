@@ -38,23 +38,23 @@ export default function CaseDetailsPage() {
   };
 
   return (
-    <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 flex justify-center">
-      <div className="w-full max-w-md md:max-w-2xl lg:max-w-3xl bg-white min-h-screen shadow-2xl relative flex flex-col">
+    <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-40">
+      <div className="w-full">
         {/* Header */}
-        <header className="px-6 py-5 border-b border-gray-200 flex items-center gap-4 bg-white sticky top-0 z-10">
+        <header className="px-6 py-5 border-b border-gray-100 flex items-center gap-4 bg-white sticky top-0 z-10">
           <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center shrink-0">
             <span className="material-icons text-white text-xl">balance</span>
           </div>
           <h1 className="font-display text-2xl font-bold text-black tracking-wide">Lex-Machina</h1>
         </header>
 
-        <main className="flex-1 px-6 pt-8 pb-12 overflow-y-auto">
+        <main className="max-w-5xl mx-auto px-6 pt-8 pb-8">
           {/* Step indicator */}
           <div className="flex items-center gap-2 mb-4">
-            <span className="bg-black text-white text-[10px] font-bold px-2 py-1 rounded tracking-wider uppercase">
+            <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded tracking-wide">
               Step 2
             </span>
-            <span className="text-xs font-medium text-text-secondary-light uppercase tracking-wide">
+            <span className="text-xs font-semibold text-gray-400 tracking-wide">
               Of 4
             </span>
           </div>
@@ -78,13 +78,13 @@ export default function CaseDetailsPage() {
           </div>
 
           {/* Form */}
-          <form className="space-y-6" onSubmit={(e) => e.preventDefault()}>
+          <form className="space-y-6 max-w-3xl" onSubmit={(e) => e.preventDefault()}>
             <div className="space-y-2">
               <label className="block text-xs font-bold text-gray-900 uppercase tracking-wide" htmlFor="case-title">
                 Case Title
               </label>
               <input
-                className="w-full px-4 py-3 bg-white border border-gray-200 text-gray-900 text-sm rounded-sm focus:ring-1 focus:ring-primary focus:border-primary placeholder-gray-400 transition-shadow outline-none"
+                className="w-full px-4 py-3 bg-white border border-gray-100 text-gray-900 text-sm rounded-lg focus:ring-1 focus:ring-primary/30 focus:border-primary/40 placeholder-gray-400 transition-shadow outline-none"
                 id="case-title"
                 placeholder="e.g. Bangsar South Condo Deposit Dispute"
                 type="text"
@@ -98,7 +98,7 @@ export default function CaseDetailsPage() {
                 Dispute Amount (RM)
               </label>
               <input
-                className="w-full px-4 py-3 bg-white border border-gray-200 text-gray-900 text-sm rounded-sm focus:ring-1 focus:ring-primary focus:border-primary transition-shadow outline-none"
+                className="w-full px-4 py-3 bg-white border border-gray-100 text-gray-900 text-sm rounded-lg focus:ring-1 focus:ring-primary/30 focus:border-primary/40 transition-shadow outline-none"
                 id="amount"
                 type="text"
                 value={amount}
@@ -111,7 +111,7 @@ export default function CaseDetailsPage() {
                 Floor Price (RM)
               </label>
               <input
-                className="w-full px-4 py-3 bg-white border border-gray-200 text-gray-900 text-sm rounded-sm focus:ring-1 focus:ring-primary focus:border-primary placeholder-gray-400 transition-shadow outline-none"
+                className="w-full px-4 py-3 bg-white border border-gray-100 text-gray-900 text-sm rounded-lg focus:ring-1 focus:ring-primary/30 focus:border-primary/40 placeholder-gray-400 transition-shadow outline-none"
                 id="floor-price"
                 type="text"
                 placeholder="Your minimum acceptable settlement"
@@ -128,7 +128,7 @@ export default function CaseDetailsPage() {
                 Incident Date (DD/MM/YY)
               </label>
               <input
-                className="w-full px-4 py-3 bg-white border border-gray-200 text-gray-900 text-sm rounded-sm focus:ring-1 focus:ring-primary focus:border-primary transition-shadow outline-none"
+                className="w-full px-4 py-3 bg-white border border-gray-100 text-gray-900 text-sm rounded-lg focus:ring-1 focus:ring-primary/30 focus:border-primary/40 transition-shadow outline-none"
                 id="date"
                 type="text"
                 value={incidentDate}
@@ -141,7 +141,7 @@ export default function CaseDetailsPage() {
                 Short Description
               </label>
               <textarea
-                className="w-full px-4 py-3 bg-white border border-gray-200 text-gray-900 text-sm rounded-sm focus:ring-1 focus:ring-primary focus:border-primary placeholder-gray-400 transition-shadow outline-none resize-none"
+                className="w-full px-4 py-3 bg-white border border-gray-100 text-gray-900 text-sm rounded-lg focus:ring-1 focus:ring-primary/30 focus:border-primary/40 placeholder-gray-400 transition-shadow outline-none resize-none"
                 id="description"
                 placeholder="Briefly explain what happened..."
                 rows={4}
@@ -158,30 +158,30 @@ export default function CaseDetailsPage() {
             </p>
           </div>
 
-          {/* Continue Button */}
-          <button
-            onClick={handleContinue}
-            className="w-full bg-[#1a2a3a] hover:bg-[#243447] text-white font-semibold py-4 px-6 rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center gap-2 group"
-          >
-            <span className="text-base">Upload Evidence</span>
-            <span className="material-icons text-white text-lg group-hover:translate-x-1 transition-transform">
-              arrow_forward
-            </span>
-          </button>
         </main>
 
-        {/* Footer */}
-        <footer className="py-8 border-t border-transparent mt-auto bg-white">
-          <div className="flex justify-center gap-8 mb-6">
-            <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
-              Privacy Policy
-            </a>
-            <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
-              Terms of Service
-            </a>
-          </div>
-          <div className="text-center">
-            <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+        <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-100 bg-white/95 backdrop-blur-sm">
+          <div className="max-w-5xl mx-auto px-6 py-4">
+            <button
+              onClick={handleContinue}
+              className="w-full bg-[#1a2a3a] hover:bg-[#243447] text-white font-semibold py-3.5 px-6 rounded-lg shadow-sm transition-all duration-200 flex items-center justify-center gap-2 group"
+            >
+              <span className="text-base">Upload Evidence</span>
+              <span className="material-icons text-white text-lg group-hover:translate-x-1 transition-transform">
+                arrow_forward
+              </span>
+            </button>
+            <div className="mt-3 flex justify-center gap-8 mb-2">
+              <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
+                Privacy Policy
+              </a>
+              <a className="text-[10px] font-semibold text-gray-400 hover:text-primary transition-colors" href="#">
+                Terms of Service
+              </a>
+            </div>
+            <div className="text-center">
+              <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+            </div>
           </div>
         </footer>
       </div>

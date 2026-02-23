@@ -24,6 +24,7 @@ from backend.rag.retrieval import retrieve_law
 from backend.core.auditor import validate_turn
 from backend.logic.evidence import validate_evidence
 from backend.prompts.chips import generate_chips_prompt
+from backend.tts.voice import synthesize_audio_bytes
 import concurrent.futures
 
 # Import agent graph (Phase 1.5)
@@ -228,12 +229,44 @@ def generate_strategy_chips(
             text = text.split("```", 1)[1].split("```", 1)[0].strip()
 
         if text.startswith("{") and text.endswith("}"):
-            return text
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return text
+            except Exception:
+                pass
 
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            return text[start:end + 1].strip()
+        start_positions = [idx for idx, ch in enumerate(text) if ch == "{"]
+        for start in start_positions:
+            depth = 0
+            in_string = False
+            escape = False
+
+            for idx in range(start, len(text)):
+                ch = text[idx]
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start:idx + 1].strip()
+                        try:
+                            parsed = json.loads(candidate)
+                            if isinstance(parsed, dict):
+                                return candidate
+                        except Exception:
+                            break
         return None
 
     def emit(step, message):
@@ -263,7 +296,7 @@ def generate_strategy_chips(
             call_gemini_with_retry,
             chips_prompt,
             2,
-            20,
+            35,
             progress_callback,
         )
         try:
@@ -360,13 +393,21 @@ def inject_mediator_guidance(case_id: str, case_data_dict: dict, history: list) 
         except json.JSONDecodeError:
             formatted_guidance = f"⚖️ **Mediator Guidance**\n\n{raw_mediator}\n\n_Note: This is AI-generated guidance, not legal advice._"
         
+        mediator_audio_url = generate_and_upload_role_audio(
+            case_id=case_id,
+            round_num=2.5,
+            role="mediator",
+            text=formatted_guidance,
+        )
+
         # Save to Firestore
         case_ref.collection("messages").add({
             "role": "mediator",
             "content": formatted_guidance,
             "round": 2.5,
             "createdAt": firestore.SERVER_TIMESTAMP,
-            "is_guidance": True
+            "is_guidance": True,
+            "audio_url": mediator_audio_url,
         })
         
         print(f"✅ Mediator guidance injected (LLM)")
@@ -513,6 +554,8 @@ def run_negotiation_turn(
                     history=intervention_history,
                     progress_callback=progress_callback,
                 )
+                if not chips:
+                    chips = _default_chips("plaintiff", 3)
                 emit("complete", "Mediator intervention complete.")
                 print("✅ Mediator-only intervention complete. Awaiting user strategy for Round 3.")
                 return {
@@ -662,12 +705,20 @@ Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
             plaintiff_offer = None
                 
         # Save plaintiff message to Firestore immediately
+        plaintiff_audio_url = generate_and_upload_role_audio(
+            case_id=case_id,
+            round_num=derived_round,
+            role="plaintiff",
+            text=plaintiff_text,
+        )
+
         print(f"💾 Saving plaintiff message...")
         plaintiff_msg_ref = messages_ref.add({
             "role": "plaintiff",
             "content": plaintiff_text,
             "round": derived_round,
             "counter_offer_rm": plaintiff_offer,
+            "audio_url": plaintiff_audio_url,
             "auditor_passed": None, # Pending audit
             "auditor_warning": None,
             "createdAt": firestore.SERVER_TIMESTAMP,
@@ -791,12 +842,19 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         except Exception as e:
             emit("defendant_error", f"❌ Defendant agent failed: {str(e)[:100]}")
             print(f"❌ Defendant generation failed: {e}")
-            raise
+            agent_text = "I need a moment to review your latest points. I maintain my current position for now."
+            counter_offer = None
+            game_eval = {"has_offer": False, "offer_amount": None, "meets_floor": False}
         
         # =====================================================================
         # Step 7: Save defendant message & determine game state
         # =====================================================================
-        audio_url = None
+        audio_url = generate_and_upload_role_audio(
+            case_id=case_id,
+            round_num=derived_round,
+            role="defendant",
+            text=agent_text,
+        )
         
         print(f"💾 Saving defendant message...")
         defendant_msg_ref = messages_ref.add({
@@ -863,6 +921,8 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
                 history=history,
                 progress_callback=progress_callback,
             )
+            if not chips:
+                chips = _default_chips("plaintiff", derived_round)
 
         if time.monotonic() - turn_started_at > TURN_TOTAL_TIMEOUT_SEC:
             raise TimeoutError(f"Turn exceeded {TURN_TOTAL_TIMEOUT_SEC}s before completion")
@@ -949,6 +1009,32 @@ def upload_audio_to_storage(
         
     except Exception as e:
         print(f"❌ Audio upload failed: {e}")
+        return None
+
+
+def generate_and_upload_role_audio(
+    case_id: str,
+    round_num: int,
+    role: str,
+    text: Optional[str],
+) -> Optional[str]:
+    if role not in {"plaintiff", "defendant", "mediator"}:
+        return None
+    if not text or not text.strip():
+        return None
+
+    try:
+        audio_bytes = synthesize_audio_bytes(text=text, role=role)
+        if not audio_bytes:
+            return None
+        return upload_audio_to_storage(
+            case_id=case_id,
+            round_num=round_num,
+            role=role,
+            audio_bytes=audio_bytes,
+        )
+    except Exception as e:
+        print(f"⚠️  TTS generation failed for {role}: {e}")
         return None
 
 
@@ -1329,11 +1415,18 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         # Step 6: Save message & audit
         # =====================================================================
         print(f"💾 Saving {user_role} message...")
+        audio_url = generate_and_upload_role_audio(
+            case_id=case_id,
+            round_num=pvp_round,
+            role=user_role,
+            text=agent_text,
+        )
         msg_ref = messages_ref.add({
             "role": user_role,
             "content": agent_text,
             "round": pvp_round,
             "counter_offer_rm": counter_offer,
+            "audio_url": audio_url,
             "auditor_passed": None,
             "auditor_warning": None,
             "createdAt": firestore.SERVER_TIMESTAMP,
@@ -1433,7 +1526,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "agent_message": agent_text,
             "plaintiff_message": agent_text if user_role == "plaintiff" else None,
             "current_round": pvp_round,
-            "audio_url": None,
+            "audio_url": audio_url,
             "auditor_passed": auditor_passed,
             "auditor_warning": auditor_warning,
             "counter_offer_rm": counter_offer,

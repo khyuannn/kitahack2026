@@ -21,7 +21,7 @@ export default function InviteModal({
 
   if (!isOpen) return null;
 
-  const inviteLink = `${typeof window !== "undefined" ? window.location.origin : ""}/negotiation/${caseId}?role=defendant`;
+  const inviteLink = `${typeof window !== "undefined" ? window.location.origin : ""}/case/${caseId}/respond`;
 
   const handleCopy = async () => {
     try {

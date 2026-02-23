@@ -564,6 +564,20 @@ async def defendant_respond(caseId: str, request: DefendantRespondRequest):
         "createdAt": firestore.SERVER_TIMESTAMP,
     })
 
+    # Add defendant's opening response so it appears in negotiation history immediately
+    opening_text = (request.defendantDescription or "").strip()
+    if opening_text:
+        case_ref.collection("messages").add({
+            "role": "defendant",
+            "content": opening_text,
+            "round": 0,
+            "counter_offer_rm": request.defendantStartingOffer,
+            "audio_url": None,
+            "auditor_passed": None,
+            "auditor_warning": None,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        })
+
     return {
         "status": "joined",
         "caseId": caseId,
