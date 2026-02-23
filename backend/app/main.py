@@ -68,10 +68,20 @@ def _init_firebase() -> None:
     if firebase_admin._apps:
         return
 
-    # Helper to resolve absolute path relative to project root
+    # Option 1: JSON content stored as env variable (for Render/production)
+    sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if sa_json:
+        try:
+            sa_dict = json.loads(sa_json)
+            cred = credentials.Certificate(sa_dict)
+            firebase_admin.initialize_app(cred)
+            print("Firebase initialized from FIREBASE_SERVICE_ACCOUNT_JSON env var")
+            return
+        except Exception as e:
+            print(f"Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+
+    # Option 2: File path (local development, backward-compatible)
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    
-    # Get from env, but if empty, fall back to default
     env_path = os.getenv("FIREBASE_SERVICE_ACCOUNT")
     if not env_path or not env_path.strip():
         service_account_path = os.path.join(base_dir, "backend", "serviceAccountKey.json")
@@ -83,7 +93,7 @@ def _init_firebase() -> None:
         firebase_admin.initialize_app(cred)
         print(f"Firebase initialized with service account: {service_account_path}")
     else:
-        print(f"Firebase credentials not found at {service_account_path}. running in mock mode.")
+        print(f"Firebase credentials not found at {service_account_path}. Running in mock mode.")
 
 
 def _ensure_db_initialized() -> None:
@@ -137,11 +147,17 @@ app = FastAPI(
     version="0.1.0",
 )
 
+_cors_origins = ["http://localhost:3000"]
+_frontend_url = os.getenv("FRONTEND_URL")
+if _frontend_url:
+    _cors_origins.append(_frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # Frontend origin for local dev
+    allow_origins=_cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",  # covers all preview + production *.vercel.app
     allow_credentials=True,
-    allow_methods=["*"], # allow all HTTP methods
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
