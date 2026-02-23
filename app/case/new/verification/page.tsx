@@ -136,6 +136,30 @@ export default function VerificationPage() {
       const res = await createCaseWithRetry(payload);
       const { caseId } = await res.json();
 
+      // Upload plaintiff evidence to Firestore
+      if (files.length > 0) {
+        const backendBaseUrl =
+          process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
+          (typeof window !== "undefined" && window.location.hostname === "localhost"
+            ? "http://127.0.0.1:8005"
+            : "");
+        const uploadUrl = backendBaseUrl
+          ? `${backendBaseUrl}/api/cases/${caseId}/upload-evidence?uploaded_by=plaintiff`
+          : `/api/cases/${caseId}/upload-evidence?uploaded_by=plaintiff`;
+
+        for (const file of files) {
+          const formData = new FormData();
+          formData.append("file", file);
+          formData.append("user_claim", `Plaintiff evidence: ${file.name}`);
+          formData.append("uploaded_by", "plaintiff");
+          try {
+            await fetch(uploadUrl, { method: "POST", body: formData });
+          } catch {
+            // Non-fatal: continue even if one file fails
+          }
+        }
+      }
+
       // Clean up
       localStorage.removeItem("caseData");
       if (typeof window !== "undefined") {

@@ -36,11 +36,9 @@ export default function EvidenceSidebar({
     const unsub = onSnapshot(
       collection(db, "cases", caseId, "evidence"),
       (snap) => {
-        console.log(`[EvidenceSidebar] snapshot fired: ${snap.docs.length} docs, side="${side}"`);
         const docs: EvidenceDoc[] = [];
         snap.forEach((d) => {
           const data = d.data();
-          console.log(`[EvidenceSidebar] doc ${d.id}:`, JSON.stringify({ uploadedBy: data.uploadedBy, fileName: data.fileName }));
           const uploadedBy: string | undefined = data.uploadedBy;
           if (side === "all") {
             // Show all evidence in "all" mode; label as "unknown" if untagged
@@ -50,7 +48,6 @@ export default function EvidenceSidebar({
           }
           // Evidence without uploadedBy is excluded from role-specific views
         });
-        console.log(`[EvidenceSidebar] matched docs: ${docs.length}`);
         setEvidence(docs);
       },
       (error) => {
