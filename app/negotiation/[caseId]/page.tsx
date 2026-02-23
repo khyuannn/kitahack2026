@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import ReactMarkdown from "react-markdown";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { db } from "@/firebase/config";
 import { useCaseMessages } from "@/hooks/useCaseMessages";
 import SettlementMeter from "@/app/components/settlementMeter";
@@ -133,6 +134,8 @@ function NegotiationPage() {
   // Track whether mediator has appeared (for gating round-3 chips)
   const [mediatorShown, setMediatorShown] = useState(false);
   const [mediatorAutoTriggered, setMediatorAutoTriggered] = useState(false);
+  const [mediatorGenerating, setMediatorGenerating] = useState(false);
+  const pendingRoundRef = useRef<number | null>(null);
 
   // Modals
   const [showEvidence, setShowEvidence] = useState(false);
@@ -187,67 +190,159 @@ function NegotiationPage() {
     setIsAudioPlaying(false);
   }, []);
 
-  const playMessageAudio = useCallback(async (message: { id: string; audio_url?: string | null }, autoplay = false) => {
-    if (!message.audio_url) return;
+  const playWithSpeechSynthesis = useCallback((text: string, role: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (!window.speechSynthesis) {
+        reject(new Error("Speech synthesis not supported"));
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text.replace(/[*_#]/g, ""));
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+      // Force English locale so the browser picks an English voice even without explicit selection
+      utterance.lang = "en-US";
 
-    if (activeAudioIdRef.current === message.id && audioRef.current) {
-      if (!audioRef.current.paused) {
+      const allVoices = window.speechSynthesis.getVoices();
+      // Prefer English voices; fall back to all voices only if no English voices found
+      const voices = allVoices.filter(v => v.lang?.startsWith("en-"));
+      const voicePool = voices.length > 0 ? voices : allVoices;
+
+      if (voicePool.length > 0) {
+        if (role === "plaintiff") {
+          utterance.voice =
+            voicePool.find(v => v.name.includes("Guy") || v.name.includes("David") || v.name.includes("James") || v.name.includes("Male")) ||
+            voicePool[0];
+          utterance.pitch = 0.9;
+        } else if (role === "defendant") {
+          utterance.voice =
+            voicePool.find(v => v.name.includes("Jenny") || v.name.includes("Zira") || v.name.includes("Sara") || v.name.includes("Female")) ||
+            voicePool[Math.min(1, voicePool.length - 1)];
+          utterance.pitch = 1.1;
+        } else {
+          utterance.voice =
+            voicePool.find(v => v.name.includes("Aria") || v.name.includes("Daniel") || v.name.includes("Google")) ||
+            voicePool[Math.min(2, voicePool.length - 1)];
+          utterance.pitch = 1.0;
+          utterance.rate = 0.9;
+        }
+      }
+      utterance.onend = () => resolve();
+      utterance.onerror = (e) => reject(e);
+      window.speechSynthesis.speak(utterance);
+    });
+  }, []);
+
+  const playMessageAudio = useCallback(async (message: { id: string; audio_url?: string | null; content?: string; role?: string }, autoplay = false) => {
+    // If currently playing this message, toggle pause/stop
+    if (activeAudioIdRef.current === message.id) {
+      if (audioRef.current && !audioRef.current.paused) {
         stopCurrentAudio();
         return;
       }
-      try {
-        await audioRef.current.play();
-        setIsAudioPlaying(true);
-      } catch {
-        if (!autoplay) {
-          alert("Unable to play audio right now.");
+      if (audioRef.current) {
+        try {
+          await audioRef.current.play();
+          setIsAudioPlaying(true);
+        } catch {
+          if (!autoplay) alert("Unable to play audio right now.");
         }
+        return;
       }
-      return;
+      // Speech synthesis is playing — stop it
+      if (window.speechSynthesis?.speaking) {
+        window.speechSynthesis.cancel();
+        activeAudioIdRef.current = null;
+        setActiveAudioMessageId(null);
+        setIsAudioPlaying(false);
+        return;
+      }
     }
 
     stopCurrentAudio();
+    window.speechSynthesis?.cancel();
 
-    const player = new Audio(message.audio_url);
-    audioRef.current = player;
-    activeAudioIdRef.current = message.id;
-    setActiveAudioMessageId(message.id);
-    setIsAudioPlaying(false);
+    if (message.audio_url) {
+      const player = new Audio(message.audio_url);
+      audioRef.current = player;
+      activeAudioIdRef.current = message.id;
+      setActiveAudioMessageId(message.id);
+      setIsAudioPlaying(false);
 
-    player.onplay = () => {
-      if (activeAudioIdRef.current === message.id) {
+      player.onplay = () => {
+        if (activeAudioIdRef.current === message.id) setIsAudioPlaying(true);
+      };
+      player.onpause = () => {
+        if (activeAudioIdRef.current === message.id) setIsAudioPlaying(false);
+      };
+      player.onended = () => {
+        if (activeAudioIdRef.current === message.id) {
+          audioRef.current = null;
+          activeAudioIdRef.current = null;
+          setActiveAudioMessageId(null);
+          setIsAudioPlaying(false);
+        }
+      };
+
+      // Wait for the audio to be loadable before playing
+      try {
+        await new Promise<void>((resolve, reject) => {
+          player.oncanplaythrough = () => resolve();
+          player.onerror = (e) => {
+            console.warn("Edge TTS audio load error:", e);
+            reject(new Error("Audio failed to load"));
+          };
+          // Timeout: if audio doesn't load in 10s, fall back
+          setTimeout(() => reject(new Error("Audio load timeout")), 10000);
+          player.load();
+        });
+        await player.play();
         setIsAudioPlaying(true);
+      } catch (loadErr) {
+        // Edge TTS audio URL failed — clean up and fall back to speech synthesis
+        console.warn("Edge TTS failed, falling back to Web Speech API:", loadErr);
+        if (activeAudioIdRef.current === message.id) {
+          audioRef.current = null;
+        }
+        if (message.content) {
+          try {
+            await playWithSpeechSynthesis(message.content, message.role || "plaintiff");
+          } catch {
+            if (!autoplay) console.warn("Both audio URL and speech synthesis failed");
+          } finally {
+            if (activeAudioIdRef.current === message.id) {
+              activeAudioIdRef.current = null;
+              setActiveAudioMessageId(null);
+              setIsAudioPlaying(false);
+            }
+          }
+          return;
+        }
+        if (!autoplay) alert("Autoplay was blocked. Press play again to start audio.");
+        if (activeAudioIdRef.current === message.id) {
+          audioRef.current = null;
+          activeAudioIdRef.current = null;
+          setActiveAudioMessageId(null);
+          setIsAudioPlaying(false);
+        }
       }
-    };
-    player.onpause = () => {
-      if (activeAudioIdRef.current === message.id) {
-        setIsAudioPlaying(false);
-      }
-    };
-    player.onended = () => {
-      if (activeAudioIdRef.current === message.id) {
-        audioRef.current = null;
-        activeAudioIdRef.current = null;
-        setActiveAudioMessageId(null);
-        setIsAudioPlaying(false);
-      }
-    };
-
-    try {
-      await player.play();
+    } else if (message.content) {
+      activeAudioIdRef.current = message.id;
+      setActiveAudioMessageId(message.id);
       setIsAudioPlaying(true);
-    } catch {
-      if (!autoplay) {
-        alert("Autoplay was blocked. Press play again to start audio.");
-      }
-      if (activeAudioIdRef.current === message.id) {
-        audioRef.current = null;
-        activeAudioIdRef.current = null;
-        setActiveAudioMessageId(null);
-        setIsAudioPlaying(false);
+      try {
+        await playWithSpeechSynthesis(message.content, message.role || "plaintiff");
+      } catch {
+        if (!autoplay) console.warn("Speech synthesis failed");
+      } finally {
+        if (activeAudioIdRef.current === message.id) {
+          activeAudioIdRef.current = null;
+          setActiveAudioMessageId(null);
+          setIsAudioPlaying(false);
+        }
       }
     }
-  }, [stopCurrentAudio]);
+  }, [stopCurrentAudio, playWithSpeechSynthesis]);
 
   /* ── Load case data (real-time) ── */
   useEffect(() => {
@@ -425,12 +520,13 @@ function NegotiationPage() {
   useEffect(() => {
     if (messages.some((m) => m.role === "mediator")) {
       setMediatorShown(true);
+      setMediatorGenerating(false);
     }
   }, [messages]);
 
   useEffect(() => {
     const candidate = [...messages].reverse().find((msg) => {
-      if (!msg.audio_url || autoPlayedMessageIdsRef.current.has(msg.id)) {
+      if (autoPlayedMessageIdsRef.current.has(msg.id)) {
         return false;
       }
 
@@ -579,7 +675,7 @@ function NegotiationPage() {
                 if (!data.auditor_passed && data.auditor_warning) {
                   setAuditorWarning(data.auditor_warning);
                 }
-                setCurrentRound(data.current_round);
+                pendingRoundRef.current = data.current_round;
               } else if (event.type === "error") {
                 throw new Error(event.message);
               }
@@ -599,6 +695,10 @@ function NegotiationPage() {
         await new Promise((r) => setTimeout(r, 4000));
       } finally {
         clearTimeout(timeoutId);
+        if (pendingRoundRef.current !== null) {
+          setCurrentRound(pendingRoundRef.current);
+          pendingRoundRef.current = null;
+        }
         setSending(false);
         setProgressStep(null);
         setInput("");
@@ -684,7 +784,7 @@ function NegotiationPage() {
   };
 
   /* ── Evidence validated callback ── */
-  const handleEvidenceValidated = (fileUri: string, fileName: string, fileType: string) => {
+  const handleEvidenceValidated = (fileUri: string, fileName: string, fileType: string, evidenceId?: string) => {
     setEvidenceUris((prev) => {
       if (prev.includes(fileUri)) return prev;
       return [...prev, fileUri];
@@ -693,6 +793,14 @@ function NegotiationPage() {
       if (prev.some((item) => item.uri === fileUri)) return prev;
       return [...prev, { uri: fileUri, name: fileName, type: fileType }];
     });
+    // Directly overwrite uploadedBy in Firestore using the Firebase client SDK —
+    // this bypasses any proxy issues with multipart form data stripping the field.
+    if (evidenceId && caseId) {
+      const evidenceRef = doc(db, "cases", caseId, "evidence", evidenceId);
+      updateDoc(evidenceRef, { uploadedBy: userRole }).catch((e) =>
+        console.warn("[Evidence] Failed to set uploadedBy:", e)
+      );
+    }
   };
 
   const removeAttachedEvidence = (uri: string) => {
@@ -722,6 +830,7 @@ function NegotiationPage() {
     if (currentRound !== 2 || mediatorAutoTriggered) return;
 
     setMediatorAutoTriggered(true);
+    setMediatorGenerating(true);
     setSelectedChip(null);
     setChips(null);
     handleSend("");
@@ -937,7 +1046,9 @@ function NegotiationPage() {
             </h1>
             <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider">
               <span className="text-sm text-gray-700">
-                Round {currentRoundDisplay}
+                {mediatorGenerating
+                  ? "Mediator Intervention"
+                  : `Round ${currentRoundDisplay}`}
               </span>{" "}
               &middot; {" "}
               {isSettled ? "Settled" : isDeadlock ? "Deadlock" : isPvp ? `${userRole === "plaintiff" ? "Plaintiff" : "Defendant"}` : "Active"}
@@ -976,7 +1087,11 @@ function NegotiationPage() {
         <div className="px-5 pt-3 bg-white border-b border-gray-100">
           <div className="mx-auto w-full max-w-[280px] rounded-2xl bg-gradient-to-r from-sky-50 via-indigo-50 to-blue-50 border border-indigo-100 px-4 py-2.5 text-center shadow-sm">
             <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-[0.18em]">Current Round</p>
-            <p className="text-xl font-extrabold text-[#1a2a3a] leading-tight mt-0.5">Round {currentRoundDisplay}</p>
+            <p className="text-xl font-extrabold text-[#1a2a3a] leading-tight mt-0.5">
+              {mediatorGenerating
+                ? "Mediator Intervention"
+                : `Round ${currentRoundDisplay}`}
+            </p>
           </div>
         </div>
 
@@ -1074,11 +1189,11 @@ function NegotiationPage() {
               return (
                 <div key={msg.id} className="flex justify-end">
                   <div className="rounded-xl px-3 py-2 max-w-[85%] bg-indigo-50 border border-indigo-100">
-                    <p className="text-[10px] text-indigo-500 font-semibold uppercase tracking-wider text-right mb-1">
+                    <p className="text-[10px] text-indigo-500 font-semibold uppercase tracking-wider text-left mb-1">
                       Your Strategy
                     </p>
                     {parsedQuestion || parsedChip || parsedText ? (
-                      <div className="space-y-1 text-right">
+                      <div className="space-y-1 text-left">
                         {parsedQuestion && (
                           <p className="text-[10px] text-indigo-500">
                             <span className="font-semibold">Question:</span> {parsedQuestion}
@@ -1096,7 +1211,7 @@ function NegotiationPage() {
                         )}
                       </div>
                     ) : (
-                      <p className="text-[10px] text-indigo-500 font-medium italic text-right">
+                      <p className="text-[10px] text-indigo-500 font-medium italic text-left">
                         {directiveText}
                       </p>
                     )}
@@ -1119,7 +1234,7 @@ function NegotiationPage() {
                       : isMediator
                       ? "bg-amber-50 text-amber-900 border border-amber-200 rounded-bl-md"
                       : "bg-gray-100 text-gray-900 rounded-bl-md"
-                  } ${isMediator ? "text-center" : ""}`}
+                  }`}
                 >
                   <p className="text-[10px] font-bold uppercase tracking-wider mb-1 opacity-60">
                     {isMyMessage
@@ -1130,12 +1245,14 @@ function NegotiationPage() {
                       ? "Mediator"
                       : msg.role}
                   </p>
-                  <p className={`text-sm leading-relaxed whitespace-pre-wrap ${isMediator ? "text-center" : ""}`}>{msg.content}</p>
-                  {msg.audio_url && (msg.role === "plaintiff" || msg.role === "defendant" || msg.role === "mediator") && (
+                  <div className="text-sm leading-relaxed prose prose-sm max-w-none [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  </div>
+                  {(msg.role === "plaintiff" || msg.role === "defendant" || msg.role === "mediator") && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        void playMessageAudio(msg);
+                        void playMessageAudio({ id: msg.id, audio_url: msg.audio_url, content: msg.content, role: msg.role });
                       }}
                       className={`mt-2 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full transition-colors ${
                         activeAudioMessageId === msg.id && isAudioPlaying
@@ -1153,7 +1270,7 @@ function NegotiationPage() {
                         : "Play audio"}
                     </button>
                   )}
-                  {msg.round && (
+                  {!!msg.round && (
                     <p className="text-[9px] mt-1.5 opacity-40">Round {msg.round}</p>
                   )}
                   {/* ── Per-message Auditor Status ── */}
@@ -1391,12 +1508,10 @@ function NegotiationPage() {
         {chips && commanderInputEnabled && !sending && !selectedChip && (
           <div className="px-5 py-4 bg-gradient-to-r from-gray-50 to-indigo-50/30 border-t border-gray-100">
             <div className="rounded-2xl bg-white border border-indigo-100 p-4 shadow-sm">
-              <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-1 text-center">
+              <p className="text-sm font-extrabold text-indigo-700 uppercase tracking-wider mb-2 text-center">
                 Strategic Decision
               </p>
-              <p className="text-sm font-semibold text-gray-800 mb-1 text-center">Question</p>
-              <p className="text-xs text-gray-600 mb-4 text-center leading-relaxed">{chips.question}</p>
-              <p className="text-sm font-semibold text-gray-800 mb-2 text-center">Choose a strategy</p>
+              <p className="text-sm font-semibold text-gray-800 mb-4 text-center leading-relaxed">{chips.question}</p>
               <div className="flex flex-wrap gap-2 justify-center">
                 {chips.options.map((opt) => (
                   <button
@@ -1418,7 +1533,7 @@ function NegotiationPage() {
             <div className="rounded-2xl bg-white border border-indigo-100 p-4 shadow-sm">
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div className="flex-1 text-center">
-                  <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Selected strategy</p>
+                  <p className="text-sm font-extrabold text-indigo-700 uppercase tracking-wider">Selected strategy</p>
                   <span className="inline-flex items-center gap-1.5 bg-[#1a2a3a] text-white text-xs font-semibold px-3 py-1.5 rounded-full mt-1">
                     <span className="material-icons" style={{ fontSize: 14 }}>psychology</span>
                     {selectedChip}
@@ -1609,6 +1724,7 @@ function NegotiationPage() {
           onClose={() => setShowEvidence(false)}
           onValidated={handleEvidenceValidated}
           caseId={caseId}
+          role={userRole}
         />
 
         {/* ── Invite Modal (PvP) ── */}

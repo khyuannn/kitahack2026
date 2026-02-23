@@ -5,8 +5,9 @@ import { useState } from "react";
 interface EvidenceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onValidated: (fileUri: string, fileName: string, fileType: string) => void;
+  onValidated: (fileUri: string, fileName: string, fileType: string, evidenceId?: string) => void;
   caseId: string;
+  role?: "plaintiff" | "defendant";
 }
 
 export default function EvidenceModal({
@@ -14,6 +15,7 @@ export default function EvidenceModal({
   onClose,
   onValidated,
   caseId,
+  role = "plaintiff",
 }: EvidenceModalProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [userClaim, setUserClaim] = useState("");
@@ -27,7 +29,8 @@ export default function EvidenceModal({
     const selectedFiles = Array.from(e.target.files || []);
     if (selectedFiles.length === 0) return;
 
-    const allowedTypes = ["image/jpeg", "image/png", "application/pdf"];
+    const allowedTypes = ["image/jpeg", "image/png", "application/pdf", "text/plain", "text/markdown"];
+    const allowedExtensions = [".jpg", ".jpeg", ".png", ".pdf", ".txt", ".md"];
     const validFiles: File[] = [];
 
     for (const selected of selectedFiles) {
@@ -35,8 +38,9 @@ export default function EvidenceModal({
         setError("Each file must be ≤ 5MB.");
         continue;
       }
-      if (!allowedTypes.includes(selected.type)) {
-        setError("Only JPG, PNG, or PDF allowed.");
+      const ext = selected.name.toLowerCase().slice(selected.name.lastIndexOf("."));
+      if (!allowedTypes.includes(selected.type) && !allowedExtensions.includes(ext)) {
+        setError("Only JPG, PNG, PDF, TXT, or MD files allowed.");
         continue;
       }
       validFiles.push(selected);
@@ -66,11 +70,12 @@ export default function EvidenceModal({
         const formData = new FormData();
         formData.append("file", file);
         formData.append("user_claim", userClaim || `Evidence: ${file.name}`);
+        formData.append("uploaded_by", role);
 
-        const res = await fetch(`/api/cases/${caseId}/upload-evidence`, {
-          method: "POST",
-          body: formData,
-        });
+        const res = await fetch(
+          `/api/cases/${caseId}/upload-evidence?uploaded_by=${encodeURIComponent(role)}`,
+          { method: "POST", body: formData }
+        );
 
         const text = await res.text();
         let data: any;
@@ -85,7 +90,7 @@ export default function EvidenceModal({
           throw new Error(data.detail || "Validation failed");
         }
 
-        onValidated(data.file_uri, file.name, file.type);
+        onValidated(data.file_uri, file.name, file.type, data.evidence_id);
       }
 
       setSuccess(true);
@@ -111,7 +116,7 @@ export default function EvidenceModal({
 
         <input
           type="file"
-          accept=".jpg,.jpeg,.png,.pdf"
+          accept=".jpg,.jpeg,.png,.pdf,.txt,.md"
           multiple
           onChange={handleFileChange}
           className="mb-3 w-full text-sm"

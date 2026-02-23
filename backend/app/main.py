@@ -4,12 +4,19 @@ Integrates with Firebase, orchestrator, and frontend per contract.md.
 Phase 1: basic api, firestore integration, dump loop
 phase 2: turn-based negotiation with RAG, auditor, and TTS
 """
+import sys
+import io
 import os
+
+# Fix Windows Unicode encoding for emoji in print() statements
+if sys.stdout and hasattr(sys.stdout, 'encoding') and sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf8'):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 import json
 import queue
 import time
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, status, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request, status, HTTPException, UploadFile, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -848,14 +855,18 @@ async def validate_evidence_endpoint(
     status_code=200,
 )
 async def upload_evidence_file(
+    request: Request,
     caseId: str,
     file: UploadFile = File(...),
-    user_claim: str = "",
+    user_claim: str = Form(""),
+    uploaded_by: str = Form("plaintiff"),
 ):
     """
     Upload evidence file directly (multipart/form-data).
     Saves to a temp file, uploads to Gemini File API, returns URI.
     """
+    # Query param takes priority — proxy-safe since it's in the URL, not the body
+    uploaded_by = request.query_params.get("uploaded_by", uploaded_by)
     import tempfile
     from backend.logic.evidence import (
         _upload_to_gemini_file_api,
@@ -880,7 +891,7 @@ async def upload_evidence_file(
     if not _is_supported_mime_type(mime_type):
         raise HTTPException(
             status_code=400,
-            detail="Only images (JPG/PNG) and PDF files are supported",
+            detail="Only images (JPG/PNG), PDF, and text (TXT/MD) files are supported",
         )
 
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -893,20 +904,24 @@ async def upload_evidence_file(
             client, file.filename or "upload", file_bytes, mime_type
         )
 
+        evidence_id = None
         if db:
             case_ref = db.collection("cases").document(caseId)
-            case_ref.collection("evidence").add({
+            _ts, doc_ref = case_ref.collection("evidence").add({
                 "fileType": mime_type,
                 "storageUrl": file_uri,
                 "fileName": file.filename or "upload",
                 "extractedText": user_claim or f"Evidence file uploaded: {file.filename or 'upload'}",
                 "file_uri": file_uri,
+                "uploadedBy": uploaded_by,
                 "createdAt": firestore.SERVER_TIMESTAMP,
             })
+            evidence_id = doc_ref.id
 
         return {
             "is_relevant": True,
             "file_uri": file_uri,
+            "evidence_id": evidence_id,
             "mime_type": mime_type,
             "confidence_score": 1.0,
             "summary_for_agent": user_claim or f"Evidence: {file.filename}",

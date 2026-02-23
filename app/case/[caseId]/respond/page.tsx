@@ -171,6 +171,7 @@ export default function DefendantRespondPage() {
           "user_claim",
           `Defendant evidence: ${file.name}`
         );
+        formData.append("uploaded_by", "defendant");
 
         const uploadRes = await fetch(
           uploadEvidenceUrl,

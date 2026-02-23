@@ -39,10 +39,14 @@ export default function EvidenceSidebar({
         const docs: EvidenceDoc[] = [];
         snap.forEach((d) => {
           const data = d.data();
-          const uploadedBy = data.uploadedBy || "plaintiff"; // backward compat
-          if (side === "all" || uploadedBy === side) {
+          const uploadedBy: string | undefined = data.uploadedBy;
+          if (side === "all") {
+            // Show all evidence in "all" mode; label as "unknown" if untagged
+            docs.push({ id: d.id, ...data, uploadedBy: uploadedBy || "unknown" } as EvidenceDoc);
+          } else if (uploadedBy === side) {
             docs.push({ id: d.id, ...data, uploadedBy } as EvidenceDoc);
           }
+          // Evidence without uploadedBy is excluded from role-specific views
         });
         setEvidence(docs);
       }
@@ -113,7 +117,7 @@ export default function EvidenceSidebar({
                 )}
               </div>
             </div>
-            {side === "all" && ev.uploadedBy && (
+            {side === "all" && ev.uploadedBy && ev.uploadedBy !== "unknown" && (
               <span
                 className={`inline-block mt-1.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
                   ev.uploadedBy === "plaintiff"
