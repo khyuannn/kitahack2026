@@ -130,6 +130,84 @@ def call_gemini_with_retry(prompt: str, max_retries: int = 2, per_call_timeout: 
     raise Exception(f"Gemini API failed after {max_retries} retries (rate limited / timed out).")
 
 
+def _default_chips(role: str, current_round: int) -> Dict[str, Any]:
+    """Return contextual default chips by role + round instead of None."""
+    if role == "defendant":
+        if current_round == 1:
+            return {
+                "question": "How should your AI agent respond to the claim?",
+                "options": [
+                    {"label": "Challenge Evidence", "strategy_id": "challenge_evidence"},
+                    {"label": "Propose Counter-Offer", "strategy_id": "counter_offer"},
+                    {"label": "Request More Details", "strategy_id": "request_details"},
+                ],
+            }
+        elif current_round == 2:
+            return {
+                "question": "How should your agent counter the plaintiff's arguments?",
+                "options": [
+                    {"label": "Rebut Claims", "strategy_id": "rebut_claims"},
+                    {"label": "Cite Legal Defense", "strategy_id": "legal_defense"},
+                    {"label": "Make Counter-Offer", "strategy_id": "counter_offer"},
+                ],
+            }
+        elif current_round == 3:
+            return {
+                "question": "The mediator has weighed in. What's your next move?",
+                "options": [
+                    {"label": "Hold Position", "strategy_id": "hold_position"},
+                    {"label": "Adjust Offer", "strategy_id": "adjust_offer"},
+                    {"label": "Legal Pressure", "strategy_id": "legal_pressure"},
+                ],
+            }
+        else:
+            return {
+                "question": "Final round. What's your closing strategy?",
+                "options": [
+                    {"label": "Best & Final Offer", "strategy_id": "best_final"},
+                    {"label": "Accept Demand", "strategy_id": "accept_demand"},
+                    {"label": "Walk Away", "strategy_id": "walk_away"},
+                ],
+            }
+    else:  # plaintiff
+        if current_round == 1:
+            return {
+                "question": "How should your AI agent open the negotiation?",
+                "options": [
+                    {"label": "Present Evidence First", "strategy_id": "evidence_first"},
+                    {"label": "Strong Legal Opening", "strategy_id": "legal_opening"},
+                    {"label": "Diplomatic Approach", "strategy_id": "diplomatic"},
+                ],
+            }
+        elif current_round == 2:
+            return {
+                "question": "How should your agent press the attack?",
+                "options": [
+                    {"label": "Challenge Response", "strategy_id": "challenge_response"},
+                    {"label": "Offer Compromise", "strategy_id": "compromise"},
+                    {"label": "Cite Legal Precedent", "strategy_id": "cite_legal"},
+                ],
+            }
+        elif current_round == 3:
+            return {
+                "question": "The mediator has weighed in. What's your strategy?",
+                "options": [
+                    {"label": "Hold Firm", "strategy_id": "hold_firm"},
+                    {"label": "Accept Recommendation", "strategy_id": "accept_recommendation"},
+                    {"label": "Legal Pressure", "strategy_id": "legal_pressure"},
+                ],
+            }
+        else:
+            return {
+                "question": "Final round. How do you want to close?",
+                "options": [
+                    {"label": "Final Demand", "strategy_id": "final_demand"},
+                    {"label": "Accept Counter", "strategy_id": "accept_counter"},
+                    {"label": "Walk Away", "strategy_id": "walk_away"},
+                ],
+            }
+
+
 def generate_strategy_chips(
     case_title: str,
     current_round: int,
@@ -139,6 +217,25 @@ def generate_strategy_chips(
     role: str = "plaintiff",
 ) -> Optional[Dict[str, Any]]:
     """Generate validated strategy chips with timeout-safe fallbacks."""
+    def _extract_json_payload(raw_text: str) -> Optional[str]:
+        text = (raw_text or "").strip()
+        if not text:
+            return None
+
+        if text.startswith("```json"):
+            text = text.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif text.startswith("```"):
+            text = text.split("```", 1)[1].split("```", 1)[0].strip()
+
+        if text.startswith("{") and text.endswith("}"):
+            return text
+
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return text[start:end + 1].strip()
+        return None
+
     def emit(step, message):
         if progress_callback:
             progress_callback(step, message)
@@ -170,24 +267,23 @@ def generate_strategy_chips(
             progress_callback,
         )
         try:
-            chips_response = chips_future.result(timeout=45)
+            chips_response = chips_future.result(timeout=60)
         finally:
             chips_executor.shutdown(wait=False, cancel_futures=True)
 
         try:
-            chips_cleaned = chips_response.strip()
-            if chips_cleaned.startswith("```json"):
-                chips_cleaned = chips_cleaned.split("```json")[1].split("```")[0].strip()
-            elif chips_cleaned.startswith("```"):
-                chips_cleaned = chips_cleaned.split("```")[1].split("```")[0].strip()
+            chips_cleaned = _extract_json_payload(chips_response)
+            if not chips_cleaned:
+                print(f"⚠️  Failed to find JSON object in chips response. Raw: {chips_response[:200] if chips_response else 'None'}")
+                return _default_chips(role, current_round)
 
             chips = json.loads(chips_cleaned)
             if not isinstance(chips, dict) or "question" not in chips or "options" not in chips:
-                print(f"⚠️  Chips missing required fields")
-                return None
+                print(f"⚠️  Chips missing required fields. Parsed: {chips}")
+                return _default_chips(role, current_round)
             if not isinstance(chips["options"], list) or len(chips["options"]) == 0:
                 print(f"⚠️  Chips options invalid")
-                return None
+                return _default_chips(role, current_round)
 
             valid_options = []
             for opt in chips["options"]:
@@ -200,17 +296,17 @@ def generate_strategy_chips(
                 chips["options"] = valid_options
                 print(f"✅ Chips generated: {chips.get('question', '')}")
                 return chips
-            return None
-        except json.JSONDecodeError:
-            print(f"⚠️  Failed to parse chips JSON")
-            return None
+            return _default_chips(role, current_round)
+        except json.JSONDecodeError as jde:
+            print(f"⚠️  Failed to parse chips JSON: {jde}. Raw: {chips_response[:200] if chips_response else 'None'}")
+            return _default_chips(role, current_round)
     except concurrent.futures.TimeoutError:
-        print(f"⚠️  Chips generation timed out, using frontend defaults")
+        print(f"⚠️  Chips generation timed out, using contextual defaults")
         emit("chips_warn", "⚠ Strategy options timed out — using defaults")
-        return None
+        return _default_chips(role, current_round)
     except Exception as e:
-        print(f"⚠️  Chips generation skipped: {e}")
-        return None
+        print(f"⚠️  Chips generation failed: {e}")
+        return _default_chips(role, current_round)
 
 
 # =============================================================================
@@ -1103,8 +1199,15 @@ def run_pvp_negotiation_turn(
         else:
             legal_context = "No specific laws retrieved. Rely on general contract principles."
 
-        # Compute floor/ceiling prices
-        defendant_max_offer = int(claim_amount * 0.5) if claim_amount > 0 else (floor_price or 0)
+        # Compute floor/ceiling prices — use defendant's own ceiling if provided
+        defendant_ceiling_from_case = case_data.get("defendantCeilingPrice")
+        if defendant_ceiling_from_case is not None and defendant_ceiling_from_case > 0:
+            defendant_max_offer = int(defendant_ceiling_from_case)
+        else:
+            defendant_max_offer = int(claim_amount * 0.5) if claim_amount > 0 else (floor_price or 0)
+
+        # Include defendant's description if available
+        defendant_description = case_data.get("defendantDescription", "")
 
         case_data_dict = {
             "case_title": case_title,
@@ -1115,6 +1218,7 @@ def run_pvp_negotiation_turn(
             "dispute_amount": claim_amount,
             "defendant_max_offer": defendant_max_offer,
             "legal_context": legal_context,
+            "defendant_description": defendant_description,
         }
 
         if time.monotonic() - turn_started_at > TURN_TOTAL_TIMEOUT_SEC:
@@ -1133,7 +1237,7 @@ def run_pvp_negotiation_turn(
         agent_text = None
         counter_offer = None
         game_eval = {"has_offer": False, "offer_amount": None, "meets_floor": False}
-        
+
         if user_role == "plaintiff":
             emit("plaintiff", "Your agent is building legal arguments...")
             print(f"🤖 [PvP Round {pvp_round}] Generating plaintiff response...")
@@ -1319,6 +1423,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "pvpRound": next_round,
             "status": case_status,
             "game_state": game_state,
+            "nextChips": chips if game_state == "active" else None,
         })
 
         emit("complete", "Turn complete!")

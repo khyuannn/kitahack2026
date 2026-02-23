@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:backend": ".\\.venv\\Scripts\\python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8005 --reload",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -11,6 +12,7 @@
   "dependencies": {
     "dotenv": "^17.2.4",
     "firebase": "^10.14.1",
+    "html2pdf.js": "^0.14.0",
     "next": "16.1.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"

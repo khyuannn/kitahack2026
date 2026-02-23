@@ -129,6 +129,18 @@ class JoinCaseRequest(BaseModel):
     displayName: Optional[str] = Field(default=None, description="User display name if available.")
 
 
+class DefendantRespondRequest(BaseModel):
+    """
+    Request model for defendant onboarding — defendant reviews case and provides their side.
+    """
+    userId: str = Field(..., description="Firebase Auth UID of the defendant.")
+    defendantDescription: str = Field(default="", description="Defendant's side of the story.")
+    defendantCeilingPrice: Optional[float] = Field(default=None, description="Max amount defendant is willing to pay (hidden from plaintiff).")
+    defendantStartingOffer: Optional[float] = Field(default=None, description="Defendant's opening offer in RM.")
+    isAnonymous: bool = Field(default=True, description="Whether user is signed in anonymously.")
+    displayName: Optional[str] = Field(default=None, description="User display name if available.")
+
+
 class UpdateParticipantRequest(BaseModel):
     """
     Request model for updating a participant's UID after auth upgrade.

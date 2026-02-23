@@ -4,6 +4,14 @@ def build_defendant_prompt(case_data: dict, current_round: int) -> str:
     evidence_summary = case_data.get("evidence_summary", "")
     max_offer = case_data.get("defendant_max_offer", 0)
     legal_context = case_data.get("legal_context", "")
+    defendant_description = case_data.get("defendant_description", "")
+    defendant_starting_offer = case_data.get("defendant_starting_offer")
+
+    defendant_context = ""
+    if defendant_description:
+        defendant_context += f"\nDefendant's Account: {defendant_description}"
+    if defendant_starting_offer:
+        defendant_context += f"\nDefendant's Initial Offer: RM {defendant_starting_offer}"
 
     base_persona = f"""
 You are the Defendant negotiation agent in a Malaysian Small Claims dispute.
@@ -12,6 +20,7 @@ Case Title: {case_title}
 Case Facts: {case_facts}
 Evidence Summary: {evidence_summary}
 Legal Context: {legal_context}
+{defendant_context}
 
 CITATION RULES:
 - Use legal citations strategically to support key arguments, NOT in every sentence.

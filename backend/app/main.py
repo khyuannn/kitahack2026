@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any
 from backend.core.orchestrator import run_dumb_loop, get_case_result, run_case as orchestrator_run_case
 import threading
 from backend.prompts.court_filing import COURT_FILING_PROMPT
+from backend.prompts.settlement_agreement import SETTLEMENT_AGREEMENT_PROMPT, DEADLOCK_COURT_FILING_HTML_PROMPT
 from backend.core.orchestrator import call_gemini_with_retry
 #phase 2
 from backend.logic.evidence import validate_evidence 
@@ -47,9 +48,12 @@ from backend.app.api_models import (
     PvpTurnRequest,
     JoinCaseRequest,
     UpdateParticipantRequest,
+    DefendantRespondRequest,
 )
 
 load_dotenv()
+
+db = None
 # -----------------------------------------------------------------------------
 # Firebase Admin SDK initialization (placeholder)
 # -----------------------------------------------------------------------------
@@ -81,6 +85,44 @@ def _init_firebase() -> None:
     else:
         print(f"Firebase credentials not found at {service_account_path}. running in mock mode.")
 
+
+def _ensure_db_initialized() -> None:
+    """Best-effort lazy initialization for Firebase/Firestore."""
+    global db
+    if db is not None:
+        return
+    try:
+        _init_firebase()
+        db = firestore.client() if firebase_admin._apps else None
+    except Exception as exc:
+        print(f"Failed to initialize Firestore lazily: {exc}")
+        db = None
+
+
+def _write_case_with_retry(case_id: str, case_doc: Dict[str, Any], retries: int = 3) -> None:
+    """Write case document with retries to handle transient Firestore cold-start failures."""
+    global db
+    if not db:
+        return
+
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            db.collection("cases").document(case_id).set(case_doc)
+            return
+        except Exception as exc:
+            last_error = exc
+            print(f"Firestore write failed (attempt {attempt}/{retries}): {exc}")
+            db = None
+            _ensure_db_initialized()
+            if attempt < retries:
+                time.sleep(0.4 * attempt)
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"Failed to persist case after retries: {last_error}",
+    )
+
 # debug purpose
 print(f"debug: current dir: {os.getcwd()}")
 path = os.getenv("FIREBASE_SERVICE_ACCOUNT") 
@@ -107,9 +149,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event() -> None:
     """Initialize Firebase on startup."""
-    _init_firebase()
-    global db
-    db = firestore.client() if firebase_admin._apps else None
+    _ensure_db_initialized()
 
 # -----------------------------------------------------------------------------
 # Error handling
@@ -146,6 +186,7 @@ async def start_case(request: StartCaseRequest) -> StartCaseResponse:
     Create a new case.
     phase1: write to firestore and return caseId
     """
+    _ensure_db_initialized()
     case_id = str(uuid.uuid4())
     if db:
         case_doc = {
@@ -174,7 +215,7 @@ async def start_case(request: StartCaseRequest) -> StartCaseResponse:
                 "plaintiffSubmitted": False,
                 "defendantSubmitted": False,
             })
-        db.collection("cases").document(case_id).set(case_doc)
+        _write_case_with_retry(case_id, case_doc)
     return StartCaseResponse(caseId=case_id)
 
 
@@ -398,6 +439,7 @@ async def next_turn(caseId: str, request: TurnRequest):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    _ensure_db_initialized()
     return {"status": "ok", "firebase": db is not None}
 
 
@@ -445,6 +487,79 @@ async def join_case(caseId: str, request: JoinCaseRequest):
     case_ref.collection("messages").add({
         "role": "system",
         "content": f"Defendant has joined the negotiation.{' (' + request.displayName + ')' if request.displayName else ''}",
+        "round": 0,
+        "createdAt": firestore.SERVER_TIMESTAMP,
+    })
+
+    return {
+        "status": "joined",
+        "caseId": caseId,
+        "role": "defendant",
+        "title": case_data.get("title"),
+        "caseType": case_data.get("caseType"),
+        "amount": case_data.get("amount"),
+    }
+
+
+@app.post("/api/cases/{caseId}/defendant-respond")
+async def defendant_respond(caseId: str, request: DefendantRespondRequest):
+    """
+    Defendant onboarding: reviews case, provides description, uploads evidence, sets offers.
+    Joins the case and saves defendant-specific fields.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+
+    if case_data.get("mode") != "pvp":
+        raise HTTPException(status_code=400, detail="This case is not a PvP negotiation")
+
+    # Check if defendant already responded
+    if case_data.get("defendantResponded"):
+        # If same user, allow re-entry
+        if case_data.get("defendantUserId") == request.userId:
+            return {
+                "status": "already_responded",
+                "caseId": caseId,
+                "role": "defendant",
+            }
+        raise HTTPException(status_code=400, detail="A defendant has already responded to this case")
+
+    # Check plaintiff isn't joining as defendant
+    if case_data.get("plaintiffUserId") == request.userId:
+        raise HTTPException(status_code=400, detail="You cannot join your own case as defendant")
+
+    # Check if another defendant already joined (but hasn't responded)
+    existing_defendant = case_data.get("defendantUserId")
+    if existing_defendant and existing_defendant != request.userId:
+        raise HTTPException(status_code=400, detail="Another defendant has already joined this case")
+
+    # Save defendant fields
+    update_data = {
+        "defendantUserId": request.userId,
+        "defendantIsAnonymous": request.isAnonymous,
+        "defendantDisplayName": request.displayName,
+        "defendantDescription": request.defendantDescription,
+        "defendantResponded": True,
+    }
+    if request.defendantCeilingPrice is not None:
+        update_data["defendantCeilingPrice"] = request.defendantCeilingPrice
+    if request.defendantStartingOffer is not None:
+        update_data["defendantStartingOffer"] = request.defendantStartingOffer
+
+    case_ref.update(update_data)
+
+    # Add system message
+    case_ref.collection("messages").add({
+        "role": "system",
+        "content": f"Defendant has joined the negotiation and provided their response.{' (' + request.displayName + ')' if request.displayName else ''}",
         "round": 0,
         "createdAt": firestore.SERVER_TIMESTAMP,
     })
@@ -1214,6 +1329,179 @@ async def accept_final_offer(caseId: str):
             raise HTTPException(status_code=500, detail=str(e))
     
     raise HTTPException(status_code=500, detail="Firebase not available")
+
+
+@app.post("/api/cases/{caseId}/generate-settlement-pdf")
+async def generate_settlement_pdf(caseId: str):
+    """
+    Generate settlement agreement HTML using Gemini.
+    Returns { html } for frontend PdfPreviewModal.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+
+    # Get messages
+    messages = []
+    messages_ref = case_ref.collection("messages").order_by("createdAt").stream()
+    for msg_doc in messages_ref:
+        msg_data = msg_doc.to_dict()
+        messages.append({
+            "role": msg_data.get("role"),
+            "content": msg_data.get("content"),
+            "round": msg_data.get("round"),
+            "counter_offer_rm": msg_data.get("counter_offer_rm"),
+        })
+
+    messages_history = "\n".join([
+        f"[Round {m.get('round')}] {(m.get('role') or 'unknown').upper()}: {(m.get('content') or '')[:300]}"
+        for m in messages
+    ])
+
+    negotiation_summary = "\n".join([
+        f"- {(m.get('role') or 'unknown').capitalize()} (Round {m.get('round')}): Offered RM {m.get('counter_offer_rm', 'N/A')}"
+        for m in messages if m.get("counter_offer_rm") is not None
+    ])
+
+    # Determine settlement amount
+    settlement = case_data.get("settlement", {})
+    settlement_amount = settlement.get("recommended_settlement_rm", 0) if settlement else 0
+    if not settlement_amount:
+        # Use last defendant offer
+        defendant_offers = [m.get("counter_offer_rm") for m in messages if m.get("role") == "defendant" and m.get("counter_offer_rm")]
+        settlement_amount = defendant_offers[-1] if defendant_offers else 0
+
+    prompt = SETTLEMENT_AGREEMENT_PROMPT.replace(
+        "{case_title}", case_data.get("title", "Dispute")
+    ).replace(
+        "{case_type}", case_data.get("caseType", "")
+    ).replace(
+        "{plaintiff_name}", case_data.get("plaintiffDisplayName") or "Claimant"
+    ).replace(
+        "{defendant_name}", case_data.get("defendantDisplayName") or "Respondent"
+    ).replace(
+        "{claim_amount}", str(case_data.get("amount", 0))
+    ).replace(
+        "{settlement_amount}", str(settlement_amount)
+    ).replace(
+        "{negotiation_summary}", negotiation_summary
+    ).replace(
+        "{messages_history}", messages_history
+    )
+
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        html_response = await loop.run_in_executor(None, call_gemini_with_retry, prompt)
+
+        # Clean up: strip markdown fencing if present
+        html_clean = html_response.strip()
+        if html_clean.startswith("```html"):
+            html_clean = html_clean.split("```html", 1)[1].rsplit("```", 1)[0].strip()
+        elif html_clean.startswith("```"):
+            html_clean = html_clean.split("```", 1)[1].rsplit("```", 1)[0].strip()
+
+        return {"html": html_clean}
+    except Exception as e:
+        print(f"❌ Settlement PDF generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
+
+@app.post("/api/cases/{caseId}/generate-deadlock-pdf")
+async def generate_deadlock_pdf(caseId: str):
+    """
+    Generate Form 206-style court filing HTML for deadlock cases.
+    Returns { html } for frontend PdfPreviewModal.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Database unavailable")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+
+    # Get messages
+    messages = []
+    messages_ref = case_ref.collection("messages").order_by("createdAt").stream()
+    for msg_doc in messages_ref:
+        msg_data = msg_doc.to_dict()
+        messages.append({
+            "role": msg_data.get("role"),
+            "content": msg_data.get("content"),
+            "round": msg_data.get("round"),
+            "counter_offer_rm": msg_data.get("counter_offer_rm"),
+        })
+
+    messages_history = "\n".join([
+        f"[Round {m.get('round')}] {(m.get('role') or 'unknown').upper()}: {(m.get('content') or '')[:300]}"
+        for m in messages
+    ])
+
+    negotiation_summary = "\n".join([
+        f"- {(m.get('role') or 'unknown').capitalize()} (Round {m.get('round')}): Offered RM {m.get('counter_offer_rm', 'N/A')}"
+        for m in messages if m.get("counter_offer_rm") is not None
+    ])
+
+    # Get final offers
+    plaintiff_offers = [m.get("counter_offer_rm") for m in messages if m.get("role") == "plaintiff" and m.get("counter_offer_rm")]
+    defendant_offers = [m.get("counter_offer_rm") for m in messages if m.get("role") == "defendant" and m.get("counter_offer_rm")]
+
+    # Get legal context
+    from backend.rag.retrieval import retrieve_law
+    legal_docs = retrieve_law(case_data.get("title", ""), use_agentic=False)
+    legal_context = "\n".join([
+        f"- {d['law']} s.{d['section']}: {d['excerpt'][:200]}"
+        for d in legal_docs
+    ]) if legal_docs else "No specific laws retrieved."
+
+    prompt = DEADLOCK_COURT_FILING_HTML_PROMPT.replace(
+        "{case_title}", case_data.get("title", "Dispute")
+    ).replace(
+        "{case_type}", case_data.get("caseType", "")
+    ).replace(
+        "{plaintiff_name}", case_data.get("plaintiffDisplayName") or "Claimant"
+    ).replace(
+        "{defendant_name}", case_data.get("defendantDisplayName") or "Respondent"
+    ).replace(
+        "{claim_amount}", str(case_data.get("amount", 0))
+    ).replace(
+        "{plaintiff_final_offer}", str(plaintiff_offers[-1] if plaintiff_offers else 0)
+    ).replace(
+        "{defendant_final_offer}", str(defendant_offers[-1] if defendant_offers else 0)
+    ).replace(
+        "{negotiation_summary}", negotiation_summary
+    ).replace(
+        "{messages_history}", messages_history
+    ).replace(
+        "{legal_context}", legal_context
+    )
+
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        html_response = await loop.run_in_executor(None, call_gemini_with_retry, prompt)
+
+        html_clean = html_response.strip()
+        if html_clean.startswith("```html"):
+            html_clean = html_clean.split("```html", 1)[1].rsplit("```", 1)[0].strip()
+        elif html_clean.startswith("```"):
+            html_clean = html_clean.split("```", 1)[1].rsplit("```", 1)[0].strip()
+
+        return {"html": html_clean}
+    except Exception as e:
+        print(f"❌ Deadlock PDF generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
 
 @app.post("/api/cases/{caseId}/reject-offer")

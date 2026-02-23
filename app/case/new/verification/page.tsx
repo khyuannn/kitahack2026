@@ -78,6 +78,41 @@ export default function VerificationPage() {
     freelance_unpaid: "Freelance and Unpaid Services",
   };
 
+  const createCaseWithRetry = async (payload: Record<string, unknown>, attempts = 3) => {
+    const backendBaseUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") || "";
+    const startCaseUrl = backendBaseUrl ? `${backendBaseUrl}/api/cases/start` : "/api/cases/start";
+    let lastError = "";
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const res = await fetch(startCaseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const errorBody = await res.text();
+          lastError = `Failed to create case (${res.status}): ${errorBody}`;
+          if (attempt < attempts && res.status >= 500) {
+            await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+            continue;
+          }
+          throw new Error(lastError);
+        }
+
+        return res;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        if (attempt < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
+          continue;
+        }
+        throw new Error(lastError);
+      }
+    }
+    throw new Error(lastError || "Failed to create case");
+  };
+
   const handleStartNegotiation = async () => {
     // For PvP mode, require non-anonymous auth
     if (negotiationMode === "pvp" && (!uid || isAnonymous)) {
@@ -88,26 +123,17 @@ export default function VerificationPage() {
 
     setCreating(true);
     try {
-      const res = await fetch("/api/cases/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: caseData.caseTitle || "Untitled Case",
-          caseType: caseData.disputeType || "tenancy_deposit",
-          description: caseData.description || "",
-          amount: Number(caseData.amount) || 0,
-          incidentDate: caseData.incidentDate || "",
-          floorPrice: Number(caseData.floorPrice) || 0,
-          mode: negotiationMode,
-          createdBy: uid || undefined,
-        }),
-      });
-
-      if (!res.ok) {
-        const errorBody = await res.text();
-        console.error("Create case failed:", res.status, errorBody);
-        throw new Error(`Failed to create case (${res.status}): ${errorBody}`);
-      }
+      const payload = {
+        title: caseData.caseTitle || "Untitled Case",
+        caseType: caseData.disputeType || "tenancy_deposit",
+        description: caseData.description || "",
+        amount: Number(caseData.amount) || 0,
+        incidentDate: caseData.incidentDate || "",
+        floorPrice: Number(caseData.floorPrice) || 0,
+        mode: negotiationMode,
+        createdBy: uid || undefined,
+      };
+      const res = await createCaseWithRetry(payload);
       const { caseId } = await res.json();
 
       // Clean up

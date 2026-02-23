@@ -9,6 +9,8 @@ import SettlementMeter from "@/app/components/settlementMeter";
 import EvidenceModal from "@/app/components/EvidenceModal";
 import { useAuth } from "@/hooks/useAuth";
 import InviteModal from "@/app/components/inviteModal";
+import EvidenceSidebar from "@/app/components/EvidenceSidebar";
+import PdfPreviewModal from "@/app/components/PdfPreviewModal";
 
 /* ── Types matching backend TurnResponse ── */
 interface ChipOption {
@@ -67,6 +69,8 @@ interface CaseData {
   defendantDisplayName?: string;
   plaintiffDisplayName?: string;
   defendantIsAnonymous?: boolean;
+  defendantResponded?: boolean;
+  nextChips?: ChipOptions | null;
 }
 
 export default function NegotiationPageWrapper() {
@@ -111,8 +115,9 @@ function NegotiationPage() {
   const [chips, setChips] = useState<ChipOptions | null>(DEFAULT_CHIPS);
   const [auditorWarning, setAuditorWarning] = useState<string | null>(null);
   const [gameState, setGameState] = useState("active");
-  const [settlementValue, setSettlementValue] = useState(50);
   const [counterOffer, setCounterOffer] = useState<number | null>(null);
+  const [plaintiffOffer, setPlaintiffOffer] = useState<number | null>(null);
+  const [defendantOffer, setDefendantOffer] = useState<number | null>(null);
   const [evidenceUris, setEvidenceUris] = useState<string[]>([]);
 
   // Two-step chip flow: user selects a chip, then optionally types extra context
@@ -131,6 +136,9 @@ function NegotiationPage() {
   const [pvpJoining, setPvpJoining] = useState(false);
   const [pvpJoinError, setPvpJoinError] = useState<string | null>(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showEvidenceDrawer, setShowEvidenceDrawer] = useState(false);
+  const [pdfPreview, setPdfPreview] = useState<{ html: string; title: string; fileName: string } | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const pvpJoinedRef = React.useRef(false);
 
   useEffect(() => {
@@ -196,10 +204,22 @@ function NegotiationPage() {
     else if (roleParam) setUserRole(roleParam);
   }, [caseData, uid, roleParam]);
 
-  /* ── PvP: Auto-join for defendants ── */
+  /* ── PvP: Redirect defendant to onboarding if they haven't responded ── */
+  useEffect(() => {
+    if (!isPvp || roleParam !== "defendant" || !caseId || !caseData) return;
+    // If defendant hasn't responded yet and isn't already the defendant user, redirect to respond page
+    if (!caseData.defendantResponded && caseData.defendantUserId !== uid) {
+      router.replace(`/case/${caseId}/respond`);
+      return;
+    }
+  }, [isPvp, roleParam, caseId, caseData, uid, router]);
+
+  /* ── PvP: Auto-join for defendants (legacy — only if already responded) ── */
   useEffect(() => {
     if (!isPvp || roleParam !== "defendant" || !caseId) return;
     if (pvpJoinedRef.current || pvpJoining || caseData?.defendantUserId) return;
+    // If defendant hasn't responded, the redirect above handles it
+    if (!caseData?.defendantResponded) return;
 
     const joinCase = async () => {
       setPvpJoining(true);
@@ -235,15 +255,20 @@ function NegotiationPage() {
       }
     };
     joinCase();
-  }, [isPvp, roleParam, caseId, uid, caseData?.defendantUserId, pvpJoining, doAnonSignIn]);
+  }, [isPvp, roleParam, caseId, uid, caseData?.defendantUserId, pvpJoining, doAnonSignIn, caseData?.defendantResponded]);
 
   /* ── PvP: Set default chips when it becomes user's turn ── */
   useEffect(() => {
     if (!isPvp || !isMyTurn || sending || !defendantJoined) return;
-    const defaults = userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS;
-    setChips(defaults);
+    const generated = caseData?.nextChips;
+    if (generated?.question && Array.isArray(generated.options) && generated.options.length > 0) {
+      setChips(generated);
+    } else {
+      const defaults = userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS;
+      setChips(defaults);
+    }
     setSelectedChip(null);
-  }, [isPvp, isMyTurn, userRole, sending, defendantJoined]);
+  }, [isPvp, isMyTurn, userRole, sending, defendantJoined, caseData?.nextChips]);
 
   /* ── PvP: Defensively clear chips when defendant hasn't joined ── */
   useEffect(() => {
@@ -292,6 +317,17 @@ function NegotiationPage() {
       setGameState(stateFromCase);
     }
   }, [caseData]);
+
+  /* ── Parse offers from message history ── */
+  useEffect(() => {
+    if (!messages.length) return;
+    for (const msg of messages) {
+      if (msg.counter_offer_rm != null) {
+        if (msg.role === "plaintiff") setPlaintiffOffer(msg.counter_offer_rm);
+        else if (msg.role === "defendant") setDefendantOffer(msg.counter_offer_rm);
+      }
+    }
+  }, [messages]);
 
   /* ── Auto-scroll ── */
   useEffect(() => {
@@ -395,21 +431,37 @@ function NegotiationPage() {
                 setGameState(data.game_state);
                 // In PvP, chips for the next player come via Firestore/effect — skip here
                 if (!isPvp) {
-                  if (data.chips) setChips(data.chips);
-                  else if (data.game_state === "active") setChips(DEFAULT_CHIPS);
-                  else setChips(null);
+                  if (data.chips?.question && data.chips?.options?.length > 0) {
+                    setChips(data.chips);
+                  } else if (data.game_state === "active") {
+                    setChips(userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS);
+                  } else {
+                    setChips(null);
+                  }
                 } else {
                   setChips(null); // Clear chips; they'll reload via the turn-change effect
                 }
-                if (data.counter_offer_rm != null) setCounterOffer(data.counter_offer_rm);
+                if (data.counter_offer_rm != null) {
+                  setCounterOffer(data.counter_offer_rm);
+                  // Track per-role offers
+                  if (isPvp) {
+                    // In PvP, the response is for the user's role
+                    if (userRole === "plaintiff") setPlaintiffOffer(data.counter_offer_rm);
+                    else setDefendantOffer(data.counter_offer_rm);
+                  } else {
+                    // In AI mode, agent_message is defendant, plaintiff_message is plaintiff
+                    setDefendantOffer(data.counter_offer_rm);
+                  }
+                }
+                // Track plaintiff offer from AI mode plaintiff_message
+                if (!isPvp && data.plaintiff_message) {
+                  // The plaintiff offer comes through the full result
+                  // We already set defendantOffer above; plaintiffOffer is tracked from messages
+                }
                 if (!data.auditor_passed && data.auditor_warning) {
                   setAuditorWarning(data.auditor_warning);
                 }
                 setCurrentRound(data.current_round);
-                if (data.counter_offer_rm != null && caseData?.amount) {
-                  const ratio = (data.counter_offer_rm / caseData.amount) * 100;
-                  setSettlementValue(Math.min(100, Math.max(0, ratio)));
-                }
               } else if (event.type === "error") {
                 throw new Error(event.message);
               }
@@ -718,15 +770,21 @@ function NegotiationPage() {
 
   return (
     <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 flex justify-center">
-      <div className="w-full max-w-md md:max-w-7xl md:grid md:grid-cols-[140px_1fr_140px] min-h-screen">
-        {/* ── Opponent Avatar (desktop only, left side) ── */}
-        <div className="hidden md:flex flex-col items-center justify-center gap-3 sticky top-0 h-screen">
-          <div className="w-28 h-28 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center shadow-lg">
-            <span className="material-icons text-5xl">person</span>
+      <div className="w-full max-w-md md:max-w-7xl md:grid md:grid-cols-[200px_1fr_200px] min-h-screen">
+        {/* ── Opponent Avatar + Evidence (desktop only, left side) ── */}
+        <div className="hidden md:flex flex-col items-center gap-3 sticky top-0 h-screen pt-8 px-2">
+          <div className="w-24 h-24 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center shadow-lg shrink-0">
+            <span className="material-icons text-4xl">person</span>
           </div>
-          <span className="text-sm font-bold uppercase tracking-wider text-gray-500">
+          <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
             {userRole === "plaintiff" ? "Defendant" : "Plaintiff"}
           </span>
+          <div className="w-full mt-2">
+            <EvidenceSidebar
+              caseId={caseId}
+              side={userRole === "plaintiff" ? "defendant" : "plaintiff"}
+            />
+          </div>
         </div>
 
         {/* ── Chat Column ── */}
@@ -794,7 +852,11 @@ function NegotiationPage() {
               </span>
             )}
           </div>
-          <SettlementMeter value={settlementValue} />
+          <SettlementMeter
+            claimAmount={caseData?.amount || 0}
+            plaintiffOffer={plaintiffOffer}
+            defendantOffer={defendantOffer}
+          />
         </div>
         </div>
 
@@ -1038,9 +1100,35 @@ function NegotiationPage() {
           <div className="px-5 py-4 bg-green-50 border-t border-green-200 text-center">
             <span className="material-icons text-green-600 text-2xl mb-1">handshake</span>
             <p className="text-sm font-bold text-green-800">Settlement Reached</p>
-            <p className="text-xs text-green-600 mt-1">
+            <p className="text-xs text-green-600 mt-1 mb-3">
               Both parties have agreed to a resolution.
             </p>
+            <button
+              onClick={async () => {
+                setPdfLoading(true);
+                try {
+                  const res = await fetch(`/api/cases/${caseId}/generate-settlement-pdf`, { method: "POST" });
+                  if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Failed to generate document");
+                  }
+                  const data = await res.json();
+                  setPdfPreview({
+                    html: data.html,
+                    title: "Settlement Agreement",
+                    fileName: `settlement-${caseId}`,
+                  });
+                } catch (err: any) {
+                  alert(err.message || "Failed to generate settlement agreement");
+                } finally {
+                  setPdfLoading(false);
+                }
+              }}
+              disabled={pdfLoading}
+              className="bg-[#1a2a3a] text-white font-semibold py-2.5 px-6 rounded-lg text-sm hover:bg-[#243447] transition-colors disabled:opacity-50"
+            >
+              {pdfLoading ? "Generating..." : "Generate Settlement Agreement"}
+            </button>
           </div>
         )}
 
@@ -1053,10 +1141,30 @@ function NegotiationPage() {
               Unable to reach agreement. You can export a court filing form.
             </p>
             <button
-              onClick={handleExportFiling}
-              className="bg-[#1a2a3a] text-white font-semibold py-2.5 px-6 rounded-lg text-sm hover:bg-[#243447] transition-colors"
+              onClick={async () => {
+                setPdfLoading(true);
+                try {
+                  const res = await fetch(`/api/cases/${caseId}/generate-deadlock-pdf`, { method: "POST" });
+                  if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Failed to generate document");
+                  }
+                  const data = await res.json();
+                  setPdfPreview({
+                    html: data.html,
+                    title: "Court Filing (Form 206)",
+                    fileName: `court-filing-${caseId}`,
+                  });
+                } catch (err: any) {
+                  alert(err.message || "Failed to generate court filing");
+                } finally {
+                  setPdfLoading(false);
+                }
+              }}
+              disabled={pdfLoading}
+              className="bg-[#1a2a3a] text-white font-semibold py-2.5 px-6 rounded-lg text-sm hover:bg-[#243447] transition-colors disabled:opacity-50"
             >
-              Export Court Filing (Form 198)
+              {pdfLoading ? "Generating..." : "Export Court Filing (Form 206)"}
             </button>
           </div>
         )}
@@ -1244,16 +1352,51 @@ function NegotiationPage() {
             defendantDisplayName={caseData?.defendantDisplayName}
           />
         )}
+
+        {/* ── Mobile Evidence Floating Button ── */}
+        <button
+          onClick={() => setShowEvidenceDrawer(true)}
+          className="md:hidden fixed bottom-20 right-4 w-12 h-12 bg-[#1a2a3a] text-white rounded-full shadow-lg flex items-center justify-center hover:bg-[#243447] transition-colors z-30"
+          title="View Evidence"
+        >
+          <span className="material-icons text-xl">folder_open</span>
+        </button>
+
+        {/* ── Mobile Evidence Drawer ── */}
+        <EvidenceSidebar
+          caseId={caseId}
+          side="all"
+          isDrawer
+          isOpen={showEvidenceDrawer}
+          onClose={() => setShowEvidenceDrawer(false)}
+        />
+
+        {/* ── PDF Preview Modal ── */}
+        {pdfPreview && (
+          <PdfPreviewModal
+            isOpen={!!pdfPreview}
+            onClose={() => setPdfPreview(null)}
+            htmlContent={pdfPreview.html}
+            title={pdfPreview.title}
+            fileName={pdfPreview.fileName}
+          />
+        )}
         </div>
 
-        {/* ── Your Avatar (desktop only, right side) ── */}
-        <div className="hidden md:flex flex-col items-center justify-center gap-3 sticky top-0 h-screen">
-          <div className="w-28 h-28 rounded-full bg-[#1a2a3a] text-white flex items-center justify-center shadow-lg">
-            <span className="material-icons text-5xl">person</span>
+        {/* ── Your Avatar + Evidence (desktop only, right side) ── */}
+        <div className="hidden md:flex flex-col items-center gap-3 sticky top-0 h-screen pt-8 px-2">
+          <div className="w-24 h-24 rounded-full bg-[#1a2a3a] text-white flex items-center justify-center shadow-lg shrink-0">
+            <span className="material-icons text-4xl">person</span>
           </div>
-          <span className="text-sm font-bold uppercase tracking-wider text-gray-500">
+          <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
             {userRole === "plaintiff" ? "Plaintiff" : "Defendant"}
           </span>
+          <div className="w-full mt-2">
+            <EvidenceSidebar
+              caseId={caseId}
+              side={userRole}
+            />
+          </div>
         </div>
       </div>
     </div>
