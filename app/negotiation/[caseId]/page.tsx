@@ -126,6 +126,7 @@ function NegotiationPage() {
   const [counterOffer, setCounterOffer] = useState<number | null>(null);
   const [plaintiffOffer, setPlaintiffOffer] = useState<number | null>(null);
   const [defendantOffer, setDefendantOffer] = useState<number | null>(null);
+  const [defendantInitialOffer, setDefendantInitialOffer] = useState<number | null>(null);
   const [evidenceUris, setEvidenceUris] = useState<string[]>([]);
   const [attachedEvidence, setAttachedEvidence] = useState<AttachedEvidence[]>([]);
 
@@ -145,7 +146,6 @@ function NegotiationPage() {
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const activeAudioIdRef = useRef<string | null>(null);
-  const autoPlayedMessageIdsRef = useRef<Set<string>>(new Set());
 
   // PvP state
   const [userRole, setUserRole] = useState<"plaintiff" | "defendant">(roleParam || "plaintiff");
@@ -190,13 +190,14 @@ function NegotiationPage() {
     setIsAudioPlaying(false);
   }, []);
 
-  const playWithSpeechSynthesis = useCallback((text: string, role: string): Promise<void> => {
+  const playWithSpeechSynthesis = useCallback(async (text: string, role: string): Promise<void> => {
+    if (!window.speechSynthesis) {
+      throw new Error("Speech synthesis not supported");
+    }
+    window.speechSynthesis.cancel();
+    // Brief pause after cancel() to avoid Chrome/Edge race condition (onerror on immediate speak)
+    await new Promise((r) => setTimeout(r, 50));
     return new Promise((resolve, reject) => {
-      if (!window.speechSynthesis) {
-        reject(new Error("Speech synthesis not supported"));
-        return;
-      }
-      window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text.replace(/[*_#]/g, ""));
       utterance.rate = 0.95;
       utterance.pitch = 1.0;
@@ -464,7 +465,13 @@ function NegotiationPage() {
     for (const msg of messages) {
       if (msg.counter_offer_rm != null) {
         if (msg.role === "plaintiff") setPlaintiffOffer(msg.counter_offer_rm);
-        else if (msg.role === "defendant") setDefendantOffer(msg.counter_offer_rm);
+        else if (msg.role === "defendant") {
+          setDefendantOffer(msg.counter_offer_rm);
+          // Capture defendant's very first offer as scale left anchor
+          if (msg.round === 0 || msg.round === 1) {
+            setDefendantInitialOffer((prev) => prev ?? msg.counter_offer_rm);
+          }
+        }
       }
     }
   }, [messages]);
@@ -523,35 +530,6 @@ function NegotiationPage() {
       setMediatorGenerating(false);
     }
   }, [messages]);
-
-  useEffect(() => {
-    const candidate = [...messages].reverse().find((msg) => {
-      if (autoPlayedMessageIdsRef.current.has(msg.id)) {
-        return false;
-      }
-
-      if (msg.role === "mediator") {
-        return true;
-      }
-
-      if (msg.role !== "plaintiff" && msg.role !== "defendant") {
-        return false;
-      }
-
-      if (isPvp) {
-        return msg.role !== userRole;
-      }
-
-      return msg.role === "defendant";
-    });
-
-    if (!candidate) {
-      return;
-    }
-
-    autoPlayedMessageIdsRef.current.add(candidate.id);
-    void playMessageAudio(candidate, true);
-  }, [messages, isPvp, userRole, playMessageAudio]);
 
   useEffect(() => {
     return () => {
@@ -1084,10 +1062,13 @@ function NegotiationPage() {
           </div>
         </header>
 
-        <div className="px-5 pt-3 bg-white border-b border-gray-100">
-          <div className="mx-auto w-full max-w-[280px] rounded-2xl bg-gradient-to-r from-sky-50 via-indigo-50 to-blue-50 border border-indigo-100 px-4 py-2.5 text-center shadow-sm">
-            <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-[0.18em]">Current Round</p>
-            <p className="text-xl font-extrabold text-[#1a2a3a] leading-tight mt-0.5">
+        <div className="px-5 pt-3 pb-4 bg-white border-b border-gray-100">
+          <div
+            className="mx-auto w-full max-w-[280px] rounded-2xl bg-gradient-to-b from-yellow-300 to-amber-500 border border-yellow-400/60 px-4 py-2.5 text-center"
+            style={{ boxShadow: "0 6px 16px rgba(180,120,0,0.35), inset 0 1px 0 rgba(255,255,220,0.6)" }}
+          >
+            <p className="text-[10px] font-bold text-amber-800 uppercase tracking-[0.18em]">Current Round</p>
+            <p className="text-xl font-extrabold text-amber-950 drop-shadow-sm leading-tight mt-0.5">
               {mediatorGenerating
                 ? "Mediator Intervention"
                 : `Round ${currentRoundDisplay}`}
@@ -1110,6 +1091,7 @@ function NegotiationPage() {
           </div>
           <SettlementMeter
             claimAmount={caseData?.amount || 0}
+            minAmount={defendantInitialOffer}
             plaintiffOffer={plaintiffOffer}
             defendantOffer={defendantOffer}
           />
@@ -1154,20 +1136,71 @@ function NegotiationPage() {
           )}
 
           {pendingOpeningMessage && roleParam === "defendant" && (
-            <div className="flex justify-end">
-              <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-[#1a2a3a] text-white rounded-br-md">
-                <p className="text-[10px] font-bold uppercase tracking-wider mb-1 opacity-60">
-                  Your Agent
+            <div className="flex justify-center">
+              <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-green-50 text-green-900 border border-green-200">
+                <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-green-200">
+                  <span className="material-icons text-green-500" style={{ fontSize: 15 }}>person_add</span>
+                  <p className="text-[10px] font-bold text-green-700 uppercase tracking-wider">
+                    Defendant has joined the negotiation
+                  </p>
+                </div>
+                <p className="text-[10px] font-bold text-green-600 uppercase tracking-wider mb-1">
+                  Defendant Opening Argument
                 </p>
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{pendingOpeningMessage.content}</p>
                 {pendingOpeningMessage.offer != null && (
-                  <p className="text-[10px] mt-1 opacity-80">Opening offer: RM {pendingOpeningMessage.offer.toLocaleString()}</p>
+                  <p className="text-[10px] mt-2 text-green-700 font-semibold">
+                    Opening offer: RM {pendingOpeningMessage.offer.toLocaleString()}
+                  </p>
                 )}
               </div>
             </div>
           )}
 
           {messages.map((msg) => {
+            // Hide system messages
+            if (msg.role === "system") return null;
+
+            // Special render: round-0 defendant opening — combined joining + argument bubble (PvP only)
+            if (isPvp && msg.role === "defendant" && msg.round === 0) {
+              return (
+                <div key={msg.id} className="flex justify-center">
+                  <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-green-50 text-green-900 border border-green-200">
+                    <div className="flex items-center gap-1.5 mb-2 pb-2 border-b border-green-200">
+                      <span className="material-icons text-green-500" style={{ fontSize: 15 }}>person_add</span>
+                      <p className="text-[10px] font-bold text-green-700 uppercase tracking-wider">
+                        Defendant has joined the negotiation
+                      </p>
+                    </div>
+                    <p className="text-[10px] font-bold text-green-600 uppercase tracking-wider mb-1">
+                      Defendant Opening Argument
+                    </p>
+                    <div className="text-sm leading-relaxed prose prose-sm max-w-none [&>p]:my-1">
+                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    </div>
+                    {msg.counter_offer_rm != null && (
+                      <p className="text-[10px] mt-2 text-green-700 font-semibold">
+                        Opening offer: RM {msg.counter_offer_rm.toLocaleString()}
+                      </p>
+                    )}
+                    <button
+                      onClick={() => void playMessageAudio({ id: msg.id, audio_url: msg.audio_url, content: msg.content, role: msg.role })}
+                      className={`mt-2 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full transition-colors ${
+                        activeAudioMessageId === msg.id && isAudioPlaying
+                          ? "bg-red-100 text-red-700"
+                          : "bg-green-100 text-green-700 hover:bg-green-200"
+                      }`}
+                    >
+                      <span className="material-icons" style={{ fontSize: 13 }}>
+                        {activeAudioMessageId === msg.id && isAudioPlaying ? "stop" : "play_arrow"}
+                      </span>
+                      {activeAudioMessageId === msg.id && isAudioPlaying ? "Stop audio" : "Play audio"}
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
             // Directive messages are shown as small right-aligned bubbles (matching plaintiff side)
             if (msg.role === "directive") {
               const roleMatch = msg.content?.match(/^\[(PLAINTIFF|DEFENDANT)\]\s*/i);

@@ -72,10 +72,16 @@ export default function EvidenceModal({
         formData.append("user_claim", userClaim || `Evidence: ${file.name}`);
         formData.append("uploaded_by", role);
 
-        const res = await fetch(
-          `/api/cases/${caseId}/upload-evidence?uploaded_by=${encodeURIComponent(role)}`,
-          { method: "POST", body: formData }
-        );
+        const backendBaseUrl =
+          process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
+          (typeof window !== "undefined" && window.location.hostname === "localhost"
+            ? "http://127.0.0.1:8005"
+            : "");
+        const uploadUrl = backendBaseUrl
+          ? `${backendBaseUrl}/api/cases/${caseId}/upload-evidence?uploaded_by=${encodeURIComponent(role)}`
+          : `/api/cases/${caseId}/upload-evidence?uploaded_by=${encodeURIComponent(role)}`;
+
+        const res = await fetch(uploadUrl, { method: "POST", body: formData });
 
         const text = await res.text();
         let data: any;

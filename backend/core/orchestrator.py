@@ -386,8 +386,6 @@ def inject_mediator_guidance(case_id: str, case_data_dict: dict, history: list) 
             formatted_guidance = f"⚖️ **Mediator Guidance**\n\n{guidance_text}"
             if recommended_rm:
                 formatted_guidance += f"\n\n**Recommended Settlement:** RM {recommended_rm:,.0f}"
-            if confidence:
-                formatted_guidance += f"\n**Confidence:** {confidence*100:.0f}%"
             formatted_guidance += "\n\n_Note: This is AI-generated guidance, not legal advice._"
             
         except json.JSONDecodeError:

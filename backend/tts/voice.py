@@ -30,7 +30,17 @@ async def synthesize_audio_bytes_async(text: str, role: str) -> bytes:
 
 
 def synthesize_audio_bytes(text: str, role: str) -> bytes:
-    return asyncio.run(synthesize_audio_bytes_async(text, role))
+    import sys
+    if sys.platform == "win32":
+        loop = asyncio.SelectorEventLoop()
+    else:
+        loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(synthesize_audio_bytes_async(text, role))
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 async def _generate_audio_async(text: str, role: str, output_filename: str):

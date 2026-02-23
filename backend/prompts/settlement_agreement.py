@@ -60,7 +60,7 @@ Start with <!DOCTYPE html> or <html> and end with </html>.
 DEADLOCK_COURT_FILING_HTML_PROMPT = """
 You are Lex-Machina's Legal Document Generator.
 
-The negotiation has ended in DEADLOCK. Generate a Form 206-style court filing document in HTML.
+The negotiation has ended in DEADLOCK. Generate a Form 206-style court filing document in formal malay language in HTML.
 
 [CASE DATA]
 Case Title: {case_title}
@@ -81,7 +81,7 @@ Final Defendant Offer: RM {defendant_final_offer}
 {legal_context}
 
 [TASK]
-Generate a formal court filing document (styled after Malaysian Small Claims Form 206) in HTML:
+Generate a formal court filing document in formal malay language(styled after Malaysian Small Claims Form 206) in HTML:
 
 1. **Court Header**: "DALAM MAHKAMAH MAJISTRET DI ________" / "IN THE MAGISTRATE'S COURT AT ________"
 2. **Case Number**: "[Case No: ___________]"

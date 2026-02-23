@@ -4,6 +4,7 @@ import React from "react";
 interface SettlementMeterProps {
   value?: number; // legacy — ignored if claimAmount provided
   claimAmount?: number;
+  minAmount?: number | null; // defendant's initial offer (left anchor)
   plaintiffOffer?: number | null;
   defendantOffer?: number | null;
 }
@@ -11,40 +12,31 @@ interface SettlementMeterProps {
 const SettlementMeter: React.FC<SettlementMeterProps> = ({
   value,
   claimAmount,
+  minAmount,
   plaintiffOffer,
   defendantOffer,
 }) => {
   // If using dual-sided mode (both claimAmount provided)
   if (claimAmount && claimAmount > 0) {
     const maxAmount = claimAmount;
-    const defPct = defendantOffer != null ? Math.max(0, Math.min(100, (defendantOffer / maxAmount) * 100)) : 0;
-    const plPct = plaintiffOffer != null ? Math.max(0, Math.min(100, (plaintiffOffer / maxAmount) * 100)) : 100;
+    // Use defendant's initial offer as left anchor if available, else 0
+    const scaleMin = minAmount != null && minAmount > 0 && minAmount < maxAmount ? minAmount : 0;
+    const scaleRange = maxAmount - scaleMin;
 
-    // Gap analysis
-    const gap = plPct - defPct;
-    const gapColor =
-      gap <= 0
-        ? "bg-gradient-to-r from-emerald-300/70 to-green-500/70"
-        : gap < 30
-        ? "bg-gradient-to-r from-amber-300/70 to-yellow-500/70"
-        : "bg-gradient-to-r from-rose-300/70 to-red-500/70";
+    const toPercent = (val: number) =>
+      Math.max(0, Math.min(100, ((val - scaleMin) / scaleRange) * 100));
+
+    const defPct = defendantOffer != null ? toPercent(defendantOffer) : 0;
+    const plPct = plaintiffOffer != null ? toPercent(plaintiffOffer) : 100;
+
+    const hasOverlap = defPct >= plPct;
 
     return (
       <div className="w-full space-y-2.5">
         {/* Bar */}
-        <div className="relative w-full h-4 bg-gradient-to-r from-blue-100 via-violet-100 to-pink-100 rounded-full border border-indigo-100 overflow-visible shadow-inner">
-          {/* Gap fill between markers */}
-          {defPct < plPct && (
-            <div
-              className={`absolute top-0 h-full ${gapColor} transition-all duration-500 ease-out rounded-full`}
-              style={{
-                left: `${defPct}%`,
-                width: `${plPct - defPct}%`,
-              }}
-            />
-          )}
-          {/* Overlap fill (settlement zone) */}
-          {defPct >= plPct && (
+        <div className="relative w-full h-4 bg-gradient-to-r from-blue-500 via-gray-100 to-red-500 rounded-full border border-gray-200 overflow-visible shadow-inner">
+          {/* Overlap fill (settlement zone reached) */}
+          {hasOverlap && (
             <div
               className="absolute top-0 h-full bg-gradient-to-r from-emerald-400/80 to-green-500/80 transition-all duration-500 ease-out rounded-full"
               style={{
@@ -54,7 +46,7 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
             />
           )}
 
-          {/* Defendant marker (left, moves right) */}
+          {/* Defendant marker (starts left, moves right) */}
           {defendantOffer != null && (
             <div
               className="absolute top-1/2 -translate-y-1/2 transition-all duration-500 ease-out"
@@ -64,7 +56,7 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
             </div>
           )}
 
-          {/* Plaintiff marker (right, moves left) */}
+          {/* Plaintiff marker (starts right, moves left) */}
           {plaintiffOffer != null && (
             <div
               className="absolute top-1/2 -translate-y-1/2 transition-all duration-500 ease-out"
@@ -82,13 +74,10 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
             <span className="text-blue-700">
               {defendantOffer != null ? `RM ${defendantOffer.toLocaleString()}` : "—"}
             </span>
-            <span className="text-gray-400 ml-0.5 uppercase tracking-wide">Def.</span>
+            <span className="text-gray-400 ml-0.5 uppercase tracking-wide">◀ Defendant</span>
           </div>
-          <span className="text-gray-500 font-semibold">
-            RM 0 — RM {maxAmount.toLocaleString()}
-          </span>
           <div className="flex items-center gap-1">
-            <span className="text-gray-400 mr-0.5 uppercase tracking-wide">Plt.</span>
+            <span className="text-gray-400 mr-0.5 uppercase tracking-wide">Plaintiff ▶</span>
             <span className="text-gray-800">
               {plaintiffOffer != null ? `RM ${plaintiffOffer.toLocaleString()}` : "—"}
             </span>
