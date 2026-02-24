@@ -18,6 +18,22 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if GEMINI_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 
+# Module-level singletons — initialized once on first use
+_auditor_index = None
+_auditor_embeddings = None
+
+def _get_auditor_clients():
+    global _auditor_index, _auditor_embeddings
+    if _auditor_index is None:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        _auditor_index = pc.Index(INDEX_NAME)
+    if _auditor_embeddings is None:
+        _auditor_embeddings = GoogleGenerativeAIEmbeddings(
+            model=EMBEDDING_MODEL,
+            google_api_key=GEMINI_API_KEY,
+        )
+    return _auditor_index, _auditor_embeddings
+
 
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
@@ -154,13 +170,7 @@ def check_rag_for_law(citation: Dict[str, str]) -> bool:
         return False
 
     try:
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_MODEL,
-            google_api_key=GEMINI_API_KEY,
-        )
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index(INDEX_NAME)
-
+        index, embeddings = _get_auditor_clients()
         query_text = _build_search_query(citation)
         query_vector = embeddings.embed_query(query_text)
         if len(query_vector) > 768:

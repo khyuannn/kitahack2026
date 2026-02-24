@@ -21,40 +21,60 @@ if GEMINI_API_KEY:
 EMBEDDING_MODEL = "models/gemini-embedding-001" 
 # Use env-configurable generation model for reasoning
 GENERATION_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+
+# Module-level singletons — initialized once on first use
+_retrieval_index = None
+_retrieval_embeddings = None
+
+def _get_retrieval_clients():
+    global _retrieval_index, _retrieval_embeddings
+    if _retrieval_index is None:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        _retrieval_index = pc.Index(INDEX_NAME)
+    if _retrieval_embeddings is None:
+        _retrieval_embeddings = GoogleGenerativeAIEmbeddings(
+            model=EMBEDDING_MODEL,
+            google_api_key=GEMINI_API_KEY,
+        )
+    return _retrieval_index, _retrieval_embeddings
 
 def call_gemini_with_backoff(prompt: str) -> str:
     """
-    Robust API call with Exponential Backoff to handle 429 errors.
+    Call Gemini for agentic query generation with 20s timeout.
+    Retries with fallback model on failure before giving up.
     """
     if not GEMINI_API_KEY:
         print("❌ Missing GEMINI_API_KEY/GOOGLE_API_KEY for query generation.")
         return ""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GENERATION_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-    
-    max_retries = 3
-    for i in range(max_retries):
-        try:
-            response = requests.post(url, json=payload, timeout=10)
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "")
-            elif response.status_code == 429:
-                wait_time = min(2 ** i, 4)
-                print(f"\u26a0\ufe0f Quota hit. Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-            else:
-                print(f"\u274c API Error: {response.text}")
-                break
-        except Exception as e:
-            print(f"\u274c Network Error: {e}")
-            time.sleep(min(2 ** i, 4))
-            
-    return ""
+    def _try_model(model_name: str, max_attempts: int = 2) -> str:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        for i in range(max_attempts):
+            try:
+                response = requests.post(url, json=payload, timeout=20)
+                if response.status_code == 200:
+                    return response.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "")
+                elif response.status_code == 429:
+                    wait_time = min(2 ** i, 4)
+                    print(f"⚠️ Quota hit on {model_name}. Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"❌ API Error on {model_name}: {response.status_code}")
+                    return ""
+            except Exception as e:
+                print(f"❌ Error on {model_name}: {e}")
+                if i < max_attempts - 1:
+                    time.sleep(min(2 ** i, 4))
+        return ""
+
+    result = _try_model(GENERATION_MODEL, max_attempts=2)
+    if result:
+        return result
+    print(f"⚠️ Primary model failed for RAG query generation. Trying fallback: {FALLBACK_MODEL}")
+    return _try_model(FALLBACK_MODEL, max_attempts=1)
 
 def format_history_for_prompt(history: List[Dict[str, Any]]) -> str:
     if not history:
@@ -129,13 +149,8 @@ def retrieve_law(
         all_matches = []
         seen_ids = set()
 
-        # 2. Connect to Pinecone
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index(INDEX_NAME)
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_MODEL,
-            google_api_key=GEMINI_API_KEY
-        )
+        # 2. Get reusable Pinecone + embeddings clients
+        index, embeddings = _get_retrieval_clients()
 
         # 3. Execute Searches
         print(f"🔎 Executing searches against Pinecone...")

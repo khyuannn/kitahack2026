@@ -33,6 +33,7 @@ interface TurnResponse {
   game_state: string;
   counter_offer_rm: number | null;
   current_turn?: string;
+  pending_decision_role?: string | null;
 }
 
 interface AttachedEvidence {
@@ -78,6 +79,7 @@ interface CaseData {
   defendantIsAnonymous?: boolean;
   defendantResponded?: boolean;
   nextChips?: ChipOptions | null;
+  defendantCeilingPrice?: number;
 }
 
 export default function NegotiationPageWrapper() {
@@ -158,6 +160,10 @@ function NegotiationPage() {
   const [pendingOpeningMessage, setPendingOpeningMessage] = useState<{ content: string; offer?: number | null } | null>(null);
   const pvpJoinedRef = React.useRef(false);
 
+  // Draggable mobile evidence drawer FAB
+  const [folderFabPos, setFolderFabPos] = useState<{ x: number; y: number } | null>(null);
+  const folderFabDragRef = useRef({ dx: 0, dy: 0, moved: false, active: false });
+
   useEffect(() => {
     if (authLoading || uid) return;
     doAnonSignIn().catch((error) => {
@@ -176,6 +182,7 @@ function NegotiationPage() {
   const [showDecision, setShowDecision] = useState(false);
   const [decidingAccept, setDecidingAccept] = useState(false);
   const [decidingReject, setDecidingReject] = useState(false);
+  const [pendingDecisionRole, setPendingDecisionRole] = useState<string | null>(null);
 
   const chatBoxRef = useRef<HTMLDivElement>(null);
 
@@ -457,6 +464,9 @@ function NegotiationPage() {
     if (stateFromCase) {
       setGameState(stateFromCase);
     }
+
+    if (caseData.pendingDecisionRole) setPendingDecisionRole(caseData.pendingDecisionRole);
+    else setPendingDecisionRole(null);
   }, [caseData]);
 
   /* ── Parse offers from message history ── */
@@ -516,12 +526,16 @@ function NegotiationPage() {
 
   /* ── Handle game_state changes ── */
   useEffect(() => {
+    if (gameState === "pending_accept") {
+      setShowDecision(pendingDecisionRole === userRole);
+      return;
+    }
     if (gameState === "pending_decision") {
       setShowDecision(!isPvp || userRole === "plaintiff");
       return;
     }
     setShowDecision(false);
-  }, [gameState, isPvp, userRole]);
+  }, [gameState, isPvp, userRole, pendingDecisionRole]);
 
   /* ── Track mediator appearance for chip gating ── */
   useEffect(() => {
@@ -537,6 +551,13 @@ function NegotiationPage() {
     };
   }, [stopCurrentAudio]);
 
+  // Init folder FAB to bottom-right corner (matches original fixed position)
+  useEffect(() => {
+    if (typeof window !== "undefined" && folderFabPos === null) {
+      setFolderFabPos({ x: window.innerWidth - 40, y: window.innerHeight - 104 });
+    }
+  }, []);
+
   /* ── Send directive (calls /api/cases/{caseId}/next-turn or pvp-turn with streaming) ── */
   const handleSend = useCallback(
     async (message: string) => {
@@ -547,7 +568,7 @@ function NegotiationPage() {
       setChips(null);
       setProgressStep("Connecting...");
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 190000);
+      const timeoutId = setTimeout(() => controller.abort(), 270000);
 
       try {
         const backendBaseUrl =
@@ -616,11 +637,13 @@ function NegotiationPage() {
             if (!line.trim()) continue;
             try {
               const event = JSON.parse(line);
-              if (event.type === "progress") {
+              if (event.type === "progress" && event.step !== "heartbeat") {
                 setProgressStep(event.message);
               } else if (event.type === "result") {
                 const data: TurnResponse = event.data;
                 setGameState(data.game_state);
+                if (data.pending_decision_role != null) setPendingDecisionRole(data.pending_decision_role);
+                else setPendingDecisionRole(null);
                 // In PvP, chips for the next player come via Firestore/effect — skip here
                 if (!isPvp) {
                   if (data.chips?.question && data.chips?.options?.length > 0) {
@@ -726,6 +749,18 @@ function NegotiationPage() {
     }
   };
 
+  const handleContinueNegotiation = async () => {
+    setDecidingReject(true);
+    try {
+      await fetch(`/api/cases/${caseId}/continue-negotiation`, { method: "POST" });
+      setGameState("active");
+      setPendingDecisionRole(null);
+      setShowDecision(false);
+    } finally {
+      setDecidingReject(false);
+    }
+  };
+
   /* ── Export court filing ── */
   const handleExportFiling = async () => {
     try {
@@ -784,6 +819,35 @@ function NegotiationPage() {
   const removeAttachedEvidence = (uri: string) => {
     setEvidenceUris((prev) => prev.filter((item) => item !== uri));
     setAttachedEvidence((prev) => prev.filter((item) => item.uri !== uri));
+  };
+
+  const onFolderFabPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    folderFabDragRef.current = {
+      dx: e.clientX - (folderFabPos?.x ?? 0),
+      dy: e.clientY - (folderFabPos?.y ?? 0),
+      moved: false,
+      active: true,
+    };
+  };
+
+  const onFolderFabPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!folderFabDragRef.current.active || !folderFabPos) return;
+    const nx = e.clientX - folderFabDragRef.current.dx;
+    const ny = e.clientY - folderFabDragRef.current.dy;
+    if (Math.abs(nx - folderFabPos.x) > 5 || Math.abs(ny - folderFabPos.y) > 5)
+      folderFabDragRef.current.moved = true;
+    setFolderFabPos({
+      x: Math.max(28, Math.min(window.innerWidth - 28, nx)),
+      y: Math.max(28, Math.min(window.innerHeight - 28, ny)),
+    });
+  };
+
+  const onFolderFabPointerUp = () => {
+    const moved = folderFabDragRef.current.moved;
+    folderFabDragRef.current.active = false;
+    folderFabDragRef.current.moved = false;
+    if (!moved) setShowEvidenceDrawer(true);
   };
 
   /* ── Invite link ── */
@@ -1064,11 +1128,29 @@ function NegotiationPage() {
 
         <div className="px-5 pt-3 pb-4 bg-white border-b border-gray-100">
           <div
-            className="mx-auto w-full max-w-[280px] rounded-2xl bg-gradient-to-b from-yellow-300 to-amber-500 border border-yellow-400/60 px-4 py-2.5 text-center"
-            style={{ boxShadow: "0 6px 16px rgba(180,120,0,0.35), inset 0 1px 0 rgba(255,255,220,0.6)" }}
+            className="mx-auto w-full max-w-[280px] rounded-2xl px-4 py-2.5 text-center"
+            style={{
+              background:
+                "linear-gradient(to bottom, #1e3a5f, #1a2a3a) padding-box, " +
+                "linear-gradient(135deg, #c8a840 0%, #e8c860 25%, #f5df90 50%, #e8c860 75%, #c8a840 100%) border-box",
+              border: "6px solid transparent",
+              boxShadow:
+                "0 2px 14px rgba(200,180,104,0.28), 0 0 28px rgba(255,253,232,0.09)",
+            }}
           >
-            <p className="text-[10px] font-bold text-amber-800 uppercase tracking-[0.18em]">Current Round</p>
-            <p className="text-xl font-extrabold text-amber-950 drop-shadow-sm leading-tight mt-0.5">
+            <p
+              className="text-[10px] font-bold uppercase tracking-[0.18em]"
+              style={{ color: "#d4bf7a" }}
+            >
+              Current Round
+            </p>
+            <p
+              className="text-xl font-extrabold leading-tight mt-0.5"
+              style={{
+                color: "#dcc078",
+                textShadow: "0 0 10px rgba(200,170,60,0.45), 0 1px 2px rgba(0,0,0,0.4)",
+              }}
+            >
               {mediatorGenerating
                 ? "Mediator Intervention"
                 : `Round ${currentRoundDisplay}`}
@@ -1079,15 +1161,26 @@ function NegotiationPage() {
         {/* ── Settlement Meter (sticky with header) ── */}
         <div className="px-5 py-3 bg-gray-50 border-b border-gray-100">
           <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-              Settlement Progress
-            </span>
-            {counterOffer != null && (
-              <span className="text-[10px] font-bold text-[#1a2a3a] bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
-                Counter: RM {counterOffer.toLocaleString()}
+          <div className="grid grid-cols-3 items-center mb-1.5">
+            <div className="flex justify-start">
+              {defendantOffer != null && (
+                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
+                  Defendant: RM {defendantOffer.toLocaleString()}
+                </span>
+              )}
+            </div>
+            <div className="flex justify-center">
+              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                Settlement Progress
               </span>
-            )}
+            </div>
+            <div className="flex justify-end">
+              {plaintiffOffer != null && (
+                <span className="text-[10px] font-bold text-fuchsia-700 bg-fuchsia-50 border border-fuchsia-100 rounded-full px-2 py-0.5">
+                  Plaintiff: RM {plaintiffOffer.toLocaleString()}
+                </span>
+              )}
+            </div>
           </div>
           <SettlementMeter
             claimAmount={caseData?.amount || 0}
@@ -1095,6 +1188,21 @@ function NegotiationPage() {
             plaintiffOffer={plaintiffOffer}
             defendantOffer={defendantOffer}
           />
+          {/* Private price anchor — visible only to self, hidden from opponent */}
+          <div className="flex justify-between mt-1">
+            {userRole === "defendant" && caseData?.defendantCeilingPrice != null && caseData.defendantCeilingPrice > 0 ? (
+              <span className="text-[9px] text-blue-400 font-semibold flex items-center gap-0.5">
+                <span className="material-icons" style={{ fontSize: 9 }}>lock</span>
+                Your ceiling: RM {caseData.defendantCeilingPrice.toLocaleString()}
+              </span>
+            ) : <span />}
+            {userRole === "plaintiff" && caseData?.floorPrice != null && caseData.floorPrice > 0 ? (
+              <span className="text-[9px] text-fuchsia-400 font-semibold flex items-center gap-0.5">
+                Your floor: RM {caseData.floorPrice.toLocaleString()}
+                <span className="material-icons" style={{ fontSize: 9 }}>lock</span>
+              </span>
+            ) : <span />}
+          </div>
           </div>
         </div>
         </div>
@@ -1434,11 +1542,20 @@ function NegotiationPage() {
           </div>
         )}
 
-        {/* ── Pending Decision (Accept/Reject) ── */}
+        {/* ── Pending Decision (Accept/Reject or Accept/Continue) ── */}
         {showDecision && (
           <div className="px-5 py-4 bg-blue-50 border-t border-blue-200">
-            <p className="text-xs font-bold text-blue-900 mb-1">Final Offer on the Table</p>
-            {counterOffer != null && (
+            <p className="text-xs font-bold text-blue-900 mb-1">
+              {gameState === "pending_accept" ? "Offer Within Your Range" : "Final Offer on the Table"}
+            </p>
+            {gameState === "pending_accept" && (
+              <p className="text-sm text-blue-800 mb-2">
+                {pendingDecisionRole === "plaintiff"
+                  ? `The opponent's offer of RM ${(counterOffer ?? 0).toLocaleString()} meets or exceeds your floor price. Do you accept?`
+                  : `The opponent's offer of RM ${(counterOffer ?? 0).toLocaleString()} is within your maximum amount. Do you accept?`}
+              </p>
+            )}
+            {counterOffer != null && gameState !== "pending_accept" && (
               <p className="text-lg font-bold text-blue-800 mb-3">
                 RM {counterOffer.toLocaleString()}
               </p>
@@ -1449,14 +1566,18 @@ function NegotiationPage() {
                 disabled={decidingAccept}
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-50"
               >
-                {decidingAccept ? "Accepting..." : "Accept Offer"}
+                {decidingAccept ? "Accepting..." : "Accept"}
               </button>
               <button
-                onClick={handleRejectOffer}
+                onClick={gameState === "pending_accept" ? handleContinueNegotiation : handleRejectOffer}
                 disabled={decidingReject}
                 className="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-50"
               >
-                {decidingReject ? "Rejecting..." : "Reject & Go to Court"}
+                {decidingReject
+                  ? "..."
+                  : gameState === "pending_accept"
+                  ? "Continue Negotiation"
+                  : "Reject & Go to Court"}
               </button>
             </div>
           </div>
@@ -1630,7 +1751,7 @@ function NegotiationPage() {
                   }}
                   placeholder="Add legal instructions, amount, or tone (optional)..."
                   disabled={sending}
-                  className="flex-1 bg-white border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
+                  className="flex-1 min-w-0 bg-white border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
                 />
                 <button
                   onClick={() => {
@@ -1646,9 +1767,6 @@ function NegotiationPage() {
                   </span>
                 </button>
               </div>
-              <p className="text-[10px] text-gray-400 mt-2 text-center">
-                1) Choose strategy  2) Add details  3) Review evidence tabs  4) Send
-              </p>
             </div>
           </div>
         )}
@@ -1700,7 +1818,7 @@ function NegotiationPage() {
                 }}
                 placeholder="Guide your agent (optional)..."
                 disabled={sending}
-                className="flex-1 bg-gray-50 border border-gray-200 rounded-full px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
+                className="flex-1 min-w-0 bg-gray-50 border border-gray-200 rounded-full px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
               />
               <button
                 onClick={() => handleSend(input)}
@@ -1771,14 +1889,23 @@ function NegotiationPage() {
           />
         )}
 
-        {/* ── Mobile Evidence Floating Button ── */}
-        <button
-          onClick={() => setShowEvidenceDrawer(true)}
-          className="md:hidden fixed bottom-20 right-4 w-12 h-12 bg-[#1a2a3a] text-white rounded-full shadow-lg flex items-center justify-center hover:bg-[#243447] transition-colors z-30"
-          title="View Evidence"
-        >
-          <span className="material-icons text-xl">folder_open</span>
-        </button>
+        {/* ── Mobile Evidence Floating Button (draggable) ── */}
+        {folderFabPos && (
+          <div
+            style={{ position: "fixed", left: folderFabPos.x - 24, top: folderFabPos.y - 24, zIndex: 30 }}
+            onPointerDown={onFolderFabPointerDown}
+            onPointerMove={onFolderFabPointerMove}
+            onPointerUp={onFolderFabPointerUp}
+            className="md:hidden touch-none select-none"
+          >
+            <button
+              title="View Evidence (drag to reposition)"
+              className="w-12 h-12 bg-[#1a2a3a] text-white rounded-full shadow-md flex items-center justify-center"
+            >
+              <span className="material-icons text-xl">folder_open</span>
+            </button>
+          </div>
+        )}
 
         {/* ── Mobile Evidence Drawer ── */}
         <EvidenceSidebar

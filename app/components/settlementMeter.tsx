@@ -52,7 +52,7 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
               className="absolute top-1/2 -translate-y-1/2 transition-all duration-500 ease-out"
               style={{ left: `${defPct}%` }}
             >
-              <div className="w-5 h-5 -ml-2.5 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600 border-2 border-white shadow-lg ring-2 ring-cyan-200" />
+              <div className="w-5 h-5 -ml-2.5 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600 border-2 border-white shadow-sm ring-2 ring-cyan-200" />
             </div>
           )}
 
@@ -62,25 +62,23 @@ const SettlementMeter: React.FC<SettlementMeterProps> = ({
               className="absolute top-1/2 -translate-y-1/2 transition-all duration-500 ease-out"
               style={{ left: `${plPct}%` }}
             >
-              <div className="w-5 h-5 -ml-2.5 rounded-full bg-gradient-to-br from-fuchsia-500 to-rose-600 border-2 border-white shadow-lg ring-2 ring-rose-200" />
+              <div className="w-5 h-5 -ml-2.5 rounded-full bg-gradient-to-br from-fuchsia-500 to-rose-600 border-2 border-white shadow-sm ring-2 ring-rose-200" />
             </div>
           )}
         </div>
 
-        {/* Labels */}
+        {/* Labels — fixed initial amounts as anchors */}
         <div className="flex justify-between items-center text-[10px] font-bold">
           <div className="flex items-center gap-1">
             <div className="w-2.5 h-2.5 rounded-full bg-gradient-to-br from-cyan-400 to-blue-600" />
             <span className="text-blue-700">
-              {defendantOffer != null ? `RM ${defendantOffer.toLocaleString()}` : "—"}
+              RM {scaleMin > 0 ? scaleMin.toLocaleString() : "0"}
             </span>
-            <span className="text-gray-400 ml-0.5 uppercase tracking-wide">◀ Defendant</span>
+            <span className="text-gray-400 ml-0.5 uppercase tracking-wide">◀ Initial</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="text-gray-400 mr-0.5 uppercase tracking-wide">Plaintiff ▶</span>
-            <span className="text-gray-800">
-              {plaintiffOffer != null ? `RM ${plaintiffOffer.toLocaleString()}` : "—"}
-            </span>
+            <span className="text-gray-400 mr-0.5 uppercase tracking-wide">Claim ▶</span>
+            <span className="text-gray-800">RM {maxAmount.toLocaleString()}</span>
             <div className="w-2.5 h-2.5 rounded-full bg-gradient-to-br from-fuchsia-500 to-rose-600" />
           </div>
         </div>

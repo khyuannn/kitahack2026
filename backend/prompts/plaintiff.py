@@ -3,8 +3,8 @@ def build_plaintiff_prompt(case_data: dict, current_round: int) -> str:
     case_type = case_data.get("case_type", "")
     incident_date = case_data.get("incident_date", "")
     dispute_amount = case_data.get("dispute_amount", 0)
-    short_description = case_data.get("short_description", "")
-    case_facts = case_data.get("case_facts", "")
+    case_description = case_data.get("case_description", "")
+    defendant_description = case_data.get("defendant_description", "")
     evidence_summary = case_data.get("evidence_summary", "")
     floor_price = case_data.get("floor_price", 0)
     legal_context = case_data.get("legal_context", "")
@@ -16,8 +16,8 @@ Case Title: {case_title}
 Case Type: {case_type}
 Incident Date: {incident_date}
 Dispute Amount: RM {dispute_amount}
-Short Description: {short_description}
-Case Facts: {case_facts}
+Case Description: {case_description}
+Defendant's Account: {defendant_description if defendant_description else "Not provided."}
 Evidence Summary: {evidence_summary}
 Legal Context: {legal_context}
 

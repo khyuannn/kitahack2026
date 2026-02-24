@@ -1,6 +1,6 @@
 def build_defendant_prompt(case_data: dict, current_round: int) -> str:
     case_title = case_data.get("case_title", "")
-    case_facts = case_data.get("case_facts", "")
+    case_description = case_data.get("case_description", "")
     evidence_summary = case_data.get("evidence_summary", "")
     max_offer = case_data.get("defendant_max_offer", 0)
     legal_context = case_data.get("legal_context", "")
@@ -17,7 +17,7 @@ def build_defendant_prompt(case_data: dict, current_round: int) -> str:
 You are the Defendant negotiation agent in a Malaysian Small Claims dispute.
 
 Case Title: {case_title}
-Case Facts: {case_facts}
+Case Description: {case_description if case_description else "Not provided."}
 Evidence Summary: {evidence_summary}
 Legal Context: {legal_context}
 {defendant_context}

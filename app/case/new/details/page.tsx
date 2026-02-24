@@ -78,7 +78,7 @@ export default function CaseDetailsPage() {
           </div>
 
           {/* Form */}
-          <form className="space-y-6 max-w-3xl" onSubmit={(e) => e.preventDefault()}>
+          <form className="space-y-6" onSubmit={(e) => e.preventDefault()}>
             <div className="space-y-2">
               <label className="block text-xs font-bold text-gray-900 uppercase tracking-wide" htmlFor="case-title">
                 Case Title

@@ -81,7 +81,9 @@ def _init_firebase() -> None:
         try:
             sa_dict = json.loads(sa_json)
             cred = credentials.Certificate(sa_dict)
-            firebase_admin.initialize_app(cred)
+            storage_bucket = os.getenv("FIREBASE_STORAGE_BUCKET", "")
+            options = {"storageBucket": storage_bucket} if storage_bucket else {}
+            firebase_admin.initialize_app(cred, options)
             print("Firebase initialized from FIREBASE_SERVICE_ACCOUNT_JSON env var")
             return
         except Exception as e:
@@ -97,7 +99,9 @@ def _init_firebase() -> None:
 
     if service_account_path and os.path.isfile(service_account_path):
         cred = credentials.Certificate(service_account_path)
-        firebase_admin.initialize_app(cred)
+        storage_bucket = os.getenv("FIREBASE_STORAGE_BUCKET", "")
+        options = {"storageBucket": storage_bucket} if storage_bucket else {}
+        firebase_admin.initialize_app(cred, options)
         print(f"Firebase initialized with service account: {service_account_path}")
     else:
         print(f"Firebase credentials not found at {service_account_path}. Running in mock mode.")
@@ -394,7 +398,7 @@ async def next_turn(caseId: str, request: TurnRequest):
     thread = threading.Thread(target=run_in_thread, daemon=True)
     thread.start()
     request_started_at = time.monotonic()
-    hard_timeout_sec = 210
+    hard_timeout_sec = 260
     heartbeat_interval_sec = 8
     
     def event_generator():
@@ -726,7 +730,7 @@ async def pvp_turn(caseId: str, request: PvpTurnRequest):
     thread = threading.Thread(target=run_in_thread, daemon=True)
     thread.start()
     request_started_at = time.monotonic()
-    hard_timeout_sec = 210
+    hard_timeout_sec = 260
     heartbeat_interval_sec = 8
 
     def event_generator():
@@ -1374,6 +1378,33 @@ async def accept_final_offer(caseId: str):
             raise HTTPException(status_code=500, detail=str(e))
     
     raise HTTPException(status_code=500, detail="Firebase not available")
+
+
+@app.post("/api/cases/{caseId}/continue-negotiation")
+async def continue_negotiation(caseId: str):
+    """User declines the favorable offer — game resumes as active."""
+    if not db:
+        raise HTTPException(status_code=500, detail="Firebase not available")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+    pending_role = case_data.get("pendingDecisionRole")
+
+    update = {
+        "game_state": "active",
+        "pendingDecisionRole": None,
+        "status": "active",
+    }
+    if case_data.get("mode") == "pvp" and pending_role:
+        update["currentTurn"] = pending_role
+        update["turnStatus"] = "waiting"
+
+    case_ref.update(update)
+    return {"status": "active", "message": "Negotiation continues."}
 
 
 @app.post("/api/cases/{caseId}/generate-settlement-pdf")

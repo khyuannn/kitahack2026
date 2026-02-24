@@ -95,7 +95,7 @@ export default function UploadEvidencePage() {
 
           {/* Upload Zone */}
           <div
-            className={`border border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer max-w-3xl ${
+            className={`border border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer ${
               dragActive
                 ? "border-blue-500 bg-blue-50"
                 : "border-gray-200 hover:border-gray-300 bg-gray-50/80"
@@ -150,7 +150,7 @@ export default function UploadEvidencePage() {
               {files.map((file, index) => (
                 <div
                   key={index}
-                  className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100 max-w-3xl"
+                  className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100"
                 >
                   <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 shrink-0">
                     <span className="material-icons text-xl">{getFileIcon(file.name)}</span>

@@ -179,8 +179,9 @@ class TurnResponse(BaseModel):
                 }
             }
         )
-    game_state: str = Field(default="active", description="current negotiation state: 'active', 'settled', 'failed', 'pending_decision', 'deadlock'")
+    game_state: str = Field(default="active", description="current negotiation state: 'active', 'settled', 'failed', 'pending_decision', 'pending_accept', 'deadlock'")
     counter_offer_rm: Optional[float] = Field(default=None, description="AI's counter offer amount in RM")
+    pending_decision_role: Optional[str] = Field(default=None, description="Role that must decide: 'plaintiff' | 'defendant' | None")
 
 #NEW: Evidence Validation (M2's Gemini Vision)
 # -----------------------------------------------------------------------------
