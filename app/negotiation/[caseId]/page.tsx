@@ -80,6 +80,7 @@ interface CaseData {
   defendantResponded?: boolean;
   nextChips?: ChipOptions | null;
   defendantCeilingPrice?: number;
+  pendingDecisionRole?: string | null;
 }
 
 export default function NegotiationPageWrapper() {
