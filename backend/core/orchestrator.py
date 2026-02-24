@@ -860,7 +860,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         # =====================================================================
         # Defendant LLM took ~15-45s — plaintiff TTS and audit should be done
         try:
-            plaintiff_audio_url = p_tts_future.result(timeout=10)
+            plaintiff_audio_url = p_tts_future.result(timeout=25)
         except Exception:
             plaintiff_audio_url = None
         finally:
@@ -918,7 +918,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         audit_result = validate_turn(agent_text)
 
         try:
-            audio_url = d_tts_future.result(timeout=10)
+            audio_url = d_tts_future.result(timeout=25)
         except Exception:
             audio_url = None
         finally:
@@ -1497,7 +1497,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             emit("auditor_warn", f"⚠ Audit failed: {auditor_warning[:80]}")
 
         try:
-            audio_url = pvp_tts_future.result(timeout=15)
+            audio_url = pvp_tts_future.result(timeout=25)
         except Exception:
             audio_url = None
         finally:

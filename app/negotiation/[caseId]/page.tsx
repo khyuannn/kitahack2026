@@ -179,6 +179,9 @@ function NegotiationPage() {
     return () => clearInterval(t);
   }, [sending]);
 
+  // Leave confirmation dialog
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+
   // Settlement decision (round 4.5)
   const [showDecision, setShowDecision] = useState(false);
   const [decidingAccept, setDecidingAccept] = useState(false);
@@ -944,7 +947,7 @@ function NegotiationPage() {
           {/* Header */}
           <header className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 bg-white">
             <button
-              onClick={() => router.push("/dashboard")}
+              onClick={() => setShowLeaveConfirm(true)}
               className="w-9 h-9 rounded-lg bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors"
             >
               <span className="material-icons text-lg text-gray-600">arrow_back</span>
@@ -1078,7 +1081,7 @@ function NegotiationPage() {
         <div className="sticky top-0 z-20">
         <header className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 bg-white">
           <button
-            onClick={() => router.push("/dashboard")}
+            onClick={() => setShowLeaveConfirm(true)}
             className="w-9 h-9 rounded-lg bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors"
           >
             <span className="material-icons text-lg text-gray-600">arrow_back</span>
@@ -1552,13 +1555,13 @@ function NegotiationPage() {
             {gameState === "pending_accept" && (
               <p className="text-sm text-blue-800 mb-2">
                 {pendingDecisionRole === "plaintiff"
-                  ? `The opponent's offer of RM ${(counterOffer ?? 0).toLocaleString()} meets or exceeds your floor price. Do you accept?`
-                  : `The opponent's offer of RM ${(counterOffer ?? 0).toLocaleString()} is within your maximum amount. Do you accept?`}
+                  ? `The opponent's offer of RM ${(defendantOffer ?? counterOffer ?? 0).toLocaleString()} meets or exceeds your floor price. Do you accept?`
+                  : `The opponent's offer of RM ${(plaintiffOffer ?? counterOffer ?? 0).toLocaleString()} is within your maximum amount. Do you accept?`}
               </p>
             )}
-            {counterOffer != null && gameState !== "pending_accept" && (
+            {(userRole === "plaintiff" ? defendantOffer : plaintiffOffer) != null && gameState !== "pending_accept" && (
               <p className="text-lg font-bold text-blue-800 mb-3">
-                RM {counterOffer.toLocaleString()}
+                RM {(userRole === "plaintiff" ? (defendantOffer ?? 0) : (plaintiffOffer ?? 0)).toLocaleString()}
               </p>
             )}
             <div className="flex gap-3">
@@ -1945,6 +1948,32 @@ function NegotiationPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Leave Confirmation Modal ── */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full mx-4">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Leave Negotiation?</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              Your session will remain open and can be rejoined later. Are you sure you want to leave?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowLeaveConfirm(false)}
+                className="flex-1 py-2 rounded-lg border border-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Stay
+              </button>
+              <button
+                onClick={() => router.push("/case/new")}
+                className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

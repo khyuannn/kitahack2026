@@ -21,20 +21,24 @@ async def synthesize_audio_bytes_async(text: str, role: str) -> bytes:
     if not safe_text:
         return b""
 
-    communicate = edge_tts.Communicate(safe_text, get_voice_for_role(role))
-    chunks: list[bytes] = []
-    async for chunk in communicate.stream():
-        if chunk.get("type") == "audio" and chunk.get("data"):
-            chunks.append(chunk["data"])
-    return b"".join(chunks)
+    voice = get_voice_for_role(role)
+    try:
+        communicate = edge_tts.Communicate(safe_text, voice)
+        chunks: list[bytes] = []
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio" and chunk.get("data"):
+                chunks.append(chunk["data"])
+        return b"".join(chunks)
+    except Exception as e:
+        print(f"[TTS] ERROR role={role!r} voice={voice!r}: {type(e).__name__}: {e}")
+        raise
 
 
 def synthesize_audio_bytes(text: str, role: str) -> bytes:
-    import sys
-    if sys.platform == "win32":
-        loop = asyncio.SelectorEventLoop()
-    else:
-        loop = asyncio.new_event_loop()
+    # Always use SelectorEventLoop — uvicorn[standard] installs uvloop on Linux,
+    # making asyncio.new_event_loop() return a uvloop.Loop which breaks edge-tts
+    # when run inside a ThreadPoolExecutor thread.
+    loop = asyncio.SelectorEventLoop()
     asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(synthesize_audio_bytes_async(text, role))
