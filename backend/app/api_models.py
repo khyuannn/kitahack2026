@@ -2,7 +2,13 @@ from pydantic import BaseModel, Field
 from typing import Literal, Optional, List
 class StartCaseRequest(BaseModel):
     title: str
-    caseType: Literal["tenancy_deposit"]
+    caseType: Literal["tenancy_deposit", "consumer_ecommerce", "freelance_unpaid"] = "tenancy_deposit"
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    incidentDate: Optional[str] = None
+    floorPrice: Optional[float] = None
+    mode: Literal["ai", "pvp"] = "ai"
+    createdBy: Optional[str] = None
 
 class StartCaseResponse(BaseModel):
     caseId: str
@@ -90,23 +96,70 @@ class ChipOptions(BaseModel):
 class TurnRequest(BaseModel):
     """
     Request model for /next-turn endpoint.
-    Handles user input and evidence injection during negotiation.
+    Handles user strategic directive and evidence injection during negotiation.
     """
     caseId: str = Field(..., description="case ID from phase1.")
-    user_message: str = Field(..., description="User's message for this turn.")
-    current_round: int = Field(..., description="Current round number.")
+    user_message: str = Field(default="", description="Optional strategic directive to guide the plaintiff AI agent.")
     evidence_uris: Optional[list[str]] = Field(default=[], description="Array of Gemini File API URIs for newly uploaded evidence.")
     # user's floor price (hidden from opponent, used for negotiation strategy)
     floor_price: Optional[float] = Field(default=None, description="User's minimum acceptable settlement amount in RM")
+
+
+class PvpTurnRequest(BaseModel):
+    """
+    Request model for /pvp-turn endpoint.
+    Handles one side's turn in a PvP negotiation.
+    """
+    caseId: str = Field(..., description="Case ID.")
+    user_message: str = Field(default="", description="Strategic directive from the human commander.")
+    user_role: Literal["plaintiff", "defendant"] = Field(..., description="The role of the user sending this turn.")
+    userId: Optional[str] = Field(default=None, description="Firebase Auth UID of the user.")
+    evidence_uris: Optional[list[str]] = Field(default=[], description="Array of Gemini File API URIs.")
+    floor_price: Optional[float] = Field(default=None, description="User's floor/ceiling price in RM.")
+
+
+class JoinCaseRequest(BaseModel):
+    """
+    Request model for /join endpoint.
+    Defendant joins a PvP case via invite link.
+    """
+    userId: str = Field(..., description="Firebase Auth UID of the joining user.")
+    role: Literal["defendant"] = Field(default="defendant", description="Role to join as.")
+    isAnonymous: bool = Field(default=True, description="Whether user is signed in anonymously.")
+    displayName: Optional[str] = Field(default=None, description="User display name if available.")
+
+
+class DefendantRespondRequest(BaseModel):
+    """
+    Request model for defendant onboarding — defendant reviews case and provides their side.
+    """
+    userId: str = Field(..., description="Firebase Auth UID of the defendant.")
+    defendantDescription: str = Field(default="", description="Defendant's side of the story.")
+    defendantCeilingPrice: Optional[float] = Field(default=None, description="Max amount defendant is willing to pay (hidden from plaintiff).")
+    defendantStartingOffer: Optional[float] = Field(default=None, description="Defendant's opening offer in RM.")
+    isAnonymous: bool = Field(default=True, description="Whether user is signed in anonymously.")
+    displayName: Optional[str] = Field(default=None, description="User display name if available.")
+
+
+class UpdateParticipantRequest(BaseModel):
+    """
+    Request model for updating a participant's UID after auth upgrade.
+    """
+    oldUserId: str = Field(..., description="Previous (anonymous) UID.")
+    newUserId: str = Field(..., description="New (Google) UID.")
+    role: Literal["plaintiff", "defendant"] = Field(..., description="Role to update.")
+    displayName: Optional[str] = Field(default=None, description="User display name.")
 
 class TurnResponse(BaseModel):
     """
     Response model for /next-turn endpoint.
     Contains AI response, audio, auditor feedback, and strategic chips.
     """
-    agent_message: str = Field(..., description="AI opponent's message.")
+    agent_message: str = Field(..., description="AI defendant's (opponent) message.")
+    plaintiff_message: Optional[str] = Field(default=None, description="AI plaintiff's (your agent) message.")
+    current_round: int = Field(default=1, description="Authoritative round number from backend.")
     #audio playback
-    audio_uri: Optional[str] = Field(default=None, description="firebase strorage URI for TTS audio of agent_message.")
+    audio_url: Optional[str] = Field(default=None, description="firebase storage URI for TTS audio of agent_message.")
     #auditor feedback (M2's validation)
     auditor_warning: Optional[str] = Field(default=None, description="warning message if auditor detects citation issues")
     auditor_passed: bool = Field(default=True, description="whether the passed the auditor check")
@@ -126,8 +179,9 @@ class TurnResponse(BaseModel):
                 }
             }
         )
-game_state:str = Field(..., description="current negaotiation state: 'active', 'settled', 'failed'",
-                       example="active")
+    game_state: str = Field(default="active", description="current negotiation state: 'active', 'settled', 'failed', 'pending_decision', 'deadlock'")
+    counter_offer_rm: Optional[float] = Field(default=None, description="AI's counter offer amount in RM")
+
 #NEW: Evidence Validation (M2's Gemini Vision)
 # -----------------------------------------------------------------------------
 class ValidateEvidenceRequest(BaseModel):

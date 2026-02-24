@@ -1,6 +1,7 @@
 python-dotenv
 fastapi==0.115.5
 uvicorn[standard]
+python-multipart
 firebase-admin==6.5.0
 langchain-community
 langchain-google-genai

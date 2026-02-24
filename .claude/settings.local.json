@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /c/Users/choon/kitahack2026 && python -c \"import ast; ast.parse\\(open\\('backend/core/orchestrator.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\" 2>&1)",
+      "Bash(cd \"C:\\\\Users\\\\choon\\\\kitahack2026\" && python -c \"from backend.core.orchestrator import generate_strategy_chips, _default_chips; print\\('OK'\\)\" 2>&1)"
+    ]
+  }
+}

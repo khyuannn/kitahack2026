@@ -1,7 +1,7 @@
-# backend/tts/voice.py
 import asyncio
-from pathlib import Path
 import os
+from pathlib import Path
+
 import edge_tts
 
 VOICE_BY_ROLE = {
@@ -11,18 +11,45 @@ VOICE_BY_ROLE = {
 }
 
 
+def get_voice_for_role(role: str) -> str:
+    role_key = (role or "").lower().strip()
+    return VOICE_BY_ROLE.get(role_key, VOICE_BY_ROLE["mediator"])
+
+
+async def synthesize_audio_bytes_async(text: str, role: str) -> bytes:
+    safe_text = (text or "").strip()
+    if not safe_text:
+        return b""
+
+    communicate = edge_tts.Communicate(safe_text, get_voice_for_role(role))
+    chunks: list[bytes] = []
+    async for chunk in communicate.stream():
+        if chunk.get("type") == "audio" and chunk.get("data"):
+            chunks.append(chunk["data"])
+    return b"".join(chunks)
+
+
+def synthesize_audio_bytes(text: str, role: str) -> bytes:
+    import sys
+    if sys.platform == "win32":
+        loop = asyncio.SelectorEventLoop()
+    else:
+        loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(synthesize_audio_bytes_async(text, role))
+    finally:
+        loop.close()
+        asyncio.set_event_loop(None)
+
+
 async def _generate_audio_async(text: str, role: str, output_filename: str):
-    """Asynchronously generates audio using Microsoft Edge's free TTS service."""
+    audio = await synthesize_audio_bytes_async(text, role)
+    with open(output_filename, "wb") as output_file:
+        output_file.write(audio)
 
-    role_key = role.lower().strip()
-    voice = VOICE_BY_ROLE.get(role_key, VOICE_BY_ROLE["mediator"])
-
-    # The library handles the WebSocket connection securely without keys
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(output_filename)
 
 def test_local_audio(text: str, role: str, output_filename: str):
-    """Synchronous wrapper so you don't have to fight AsyncIO."""
     asyncio.run(_generate_audio_async(text, role, output_filename))
     print(f"[{role}] Audio saved to: {output_filename}")
 

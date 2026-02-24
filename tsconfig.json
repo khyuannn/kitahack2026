@@ -18,13 +18,15 @@
     "isolatedModules": true,
     "jsx": "react-jsx",
     "plugins": [
-        {
-          "name": "next"
-        }
-      ],
+      {
+        "name": "next"
+      }
+    ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     }
   },
   "include": [
