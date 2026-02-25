@@ -20,8 +20,8 @@ if GEMINI_API_KEY:
 # Standard embedding model
 EMBEDDING_MODEL = "models/gemini-embedding-001" 
 # Use env-configurable generation model for reasoning
-GENERATION_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
-FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+GENERATION_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
 
 # Module-level singletons — initialized once on first use
 _retrieval_index = None
@@ -70,7 +70,7 @@ def call_gemini_with_backoff(prompt: str) -> str:
                     time.sleep(min(2 ** i, 4))
         return ""
 
-    result = _try_model(GENERATION_MODEL, max_attempts=2)
+    result = _try_model(GENERATION_MODEL, max_attempts=1)
     if result:
         return result
     print(f"⚠️ Primary model failed for RAG query generation. Trying fallback: {FALLBACK_MODEL}")

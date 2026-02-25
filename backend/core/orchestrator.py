@@ -12,6 +12,7 @@ from firebase_admin import firestore, storage
 from google import genai
 from google.genai import types
 import json
+import re
 from backend.logic.neurosymbolic import evaluate_game_state
 
 # =====================================================================
@@ -26,6 +27,7 @@ from backend.logic.evidence import validate_evidence
 from backend.prompts.chips import generate_chips_prompt
 from backend.tts.voice import synthesize_audio_bytes
 import concurrent.futures
+import threading
 
 # Import agent graph (Phase 1.5)
 try:
@@ -36,8 +38,8 @@ except ImportError:
 
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
-FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash")
+PRIMARY_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
 
 
 # Phase 2 Constants
@@ -90,6 +92,29 @@ def _call_gemini_once(prompt: str, model_name: str, file_parts: Optional[List[tu
         contents=prompt
     )
     return response.text
+
+
+def _extract_json_from_text(text: str) -> str:
+    """Extract a JSON object from raw LLM output.
+
+    Handles three cases (in priority order):
+    1. Response wrapped in ```json ... ``` fences
+    2. Response wrapped in ``` ... ``` fences
+    3. JSON object embedded anywhere in prose (LLM forgot to output ONLY JSON)
+
+    Falls back to returning the original text unchanged so the caller's
+    json.loads will still raise JSONDecodeError as before.
+    """
+    text = (text or "").strip()
+    if text.startswith("```json"):
+        return text.split("```json", 1)[1].split("```", 1)[0].strip()
+    if text.startswith("```"):
+        return text.split("```", 1)[1].split("```", 1)[0].strip()
+    # Search for the outermost {...} anywhere in the text
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return match.group(0).strip()
+    return text
 
 
 def _build_directive_section(user_message: str, role: str = "plaintiff") -> str:
@@ -295,10 +320,15 @@ def generate_strategy_chips(
     chips = None
     try:
         emit("chips", "Generating strategic options...")
-        conversation_history_str = "\n".join([
-            f"[{msg['role'].upper()}]: {msg['content'][:100]}..."
-            for msg in history[-4:]
-        ])
+        recent = history[-4:]
+        history_lines = []
+        for i, msg in enumerate(recent):
+            role_label = msg['role'].upper()
+            if i == len(recent) - 1:
+                history_lines.append(f"[LATEST MESSAGE - {role_label}]: {msg['content']}")
+            else:
+                history_lines.append(f"[{role_label}]: {msg['content'][:500]}")
+        conversation_history_str = "\n".join(history_lines)
         case_context_dict = {
             "case_title": case_title,
             "current_round": current_round,
@@ -594,10 +624,13 @@ def run_negotiation_turn(
                     chips = _default_chips("plaintiff", 3)
                 emit("complete", "Mediator intervention complete.")
                 print("✅ Mediator-only intervention complete. Awaiting user strategy for Round 3.")
+                # Persist displayRound so frontend survives refresh
+                case_ref.update({"displayRound": 3})
                 return {
                     "agent_message": "Mediator guidance has been posted. Review it and choose your next strategy.",
                     "plaintiff_message": None,
                     "current_round": 3,
+                    "display_round": 3,
                     "audio_url": None,
                     "auditor_passed": True,
                     "auditor_warning": None,
@@ -708,12 +741,7 @@ Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
             
             # Parse plaintiff JSON
             try:
-                cleaned = raw_plaintiff.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                elif cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
-                
+                cleaned = _extract_json_from_text(raw_plaintiff)
                 plaintiff_json = json.loads(cleaned)
                 plaintiff_text = plaintiff_json.get("message", cleaned)
                 plaintiff_offer = plaintiff_json.get("counter_offer_rm")
@@ -815,17 +843,12 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             
             # Parse JSON
             try:
-                cleaned = raw_response.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                elif cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
-                
+                cleaned = _extract_json_from_text(raw_response)
                 response_json = json.loads(cleaned)
                 agent_text = response_json.get("message", cleaned)
-                game_eval = evaluate_game_state(response_json, floor_price or 0)
+                game_eval = evaluate_game_state(response_json, floor_price or 0, current_round=derived_round, max_rounds=MAX_ROUNDS)
                 counter_offer = game_eval["offer_amount"]
-                
+
                 print(f"✅ Defendant JSON parsed. Offer: {counter_offer}, meets_floor: {game_eval['meets_floor']}")
             except json.JSONDecodeError:
                 print(f"⚠️  Defendant JSON parse failed, using raw text")
@@ -842,7 +865,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             try:
                 response_json = json.loads(raw_response)
                 agent_text = response_json.get("message", raw_response)
-                game_eval = evaluate_game_state(response_json, floor_price or 0)
+                game_eval = evaluate_game_state(response_json, floor_price or 0, current_round=derived_round, max_rounds=MAX_ROUNDS)
                 counter_offer = game_eval["offer_amount"]
             except Exception:
                 agent_text = "I need a moment to review your points. I maintain my current position for now."
@@ -949,10 +972,13 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             case_ref.update({"game_state": "pending_accept", "pendingDecisionRole": "plaintiff"})
             print(f"⏳ Plaintiff decision required! Offer ({counter_offer}) meets floor ({floor_price})")
 
+        # After the final round, ALWAYS force the final accept/reject screen.
+        # This overrides pending_accept too — at round 4 there is no
+        # "Continue Negotiation" option, only Accept or Reject & Go to Court.
         if derived_round >= MAX_ROUNDS:
-            if game_state != "settled" and game_state != "pending_accept":
+            if game_state != "settled":
                 game_state = "pending_decision"
-                print(f"⏰ Max rounds reached. Awaiting user decision...")
+                print(f"⏰ Round {derived_round} is the last round. Forcing final accept/reject decision screen.")
 
         # =====================================================================
         # Step 9: Generate chips (sequential — avoids Gemini rate limits)
@@ -975,14 +1001,25 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         # =====================================================================
         # Step 10: Return response
         # =====================================================================
+        # display_round = the round the user is ABOUT TO play next
+        display_round = min(derived_round + 1, MAX_ROUNDS) if game_state == "active" else derived_round
+        # If mediator will fire next (round 2 → 3 transition), keep display at
+        # current round so the badge stays on "Round 2" until the mediator
+        # auto-trigger shows "Mediator Intervention", then advances to 3.
+        if game_state == "active" and derived_round == 2 and not mediator_already_injected:
+            display_round = derived_round  # Stay at 2; mediator early-return advances to 3
+        # Persist so frontend survives page refresh
+        case_ref.update({"displayRound": display_round})
+
         emit("complete", "Turn complete!")
-        print(f"✅ [Round {derived_round}] Complete - Game state: {game_state}")
+        print(f"✅ [Round {derived_round}] Complete - Game state: {game_state}, displayRound: {display_round}")
         print(f"{'='*60}\n")
         
         return {
             "agent_message": agent_text,
             "plaintiff_message": plaintiff_text,
             "current_round": derived_round,
+            "display_round": display_round,
             "audio_url": audio_url,
             "auditor_passed": auditor_passed,
             "auditor_warning": auditor_warning,
@@ -1005,6 +1042,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "agent_message": f"System error: {error_msg}",
             "plaintiff_message": None,
             "current_round": current_round,
+            "display_round": current_round,
             "audio_url": None,
             "auditor_passed": False,
             "auditor_warning": f"System error: {error_msg}",
@@ -1192,6 +1230,73 @@ def generate_mediator_settlement(case_id: str) -> Dict[str, Any]:
     except Exception as e:
         print(f"❌ Mediator settlement error: {str(e)}")
         raise e
+
+# =============================================================================
+# PvP: Background work (Phase 2) — chip generation + mediator + final update
+# =============================================================================
+def _pvp_background_work(
+    case_ref,
+    case_id: str,
+    case_data_dict: dict,
+    history: list,
+    agent_text: str,
+    user_role: str,
+    pvp_round: int,
+    next_turn: str,
+    next_round: int,
+    game_state: str,
+    is_mediator_round: bool,
+    counter_offer,
+) -> None:
+    """Phase 2: runs in background thread after SSE result is sent.
+    Injects mediator (if needed) and generates strategy chips for the next player,
+    then does the final Firestore update to turnStatus='waiting'.
+    """
+    chips = None
+    try:
+        # Only inject mediator if the game is still active — if it's pending_accept the
+        # decision panel is showing and we must not alter state until the user resumes.
+        if is_mediator_round and game_state == "active":
+            mediator_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
+            inject_mediator_guidance(case_id, case_data_dict, mediator_history)
+
+        if game_state == "active":
+            try:
+                chips = generate_strategy_chips(
+                    case_title=case_data_dict.get("case_title", "Dispute"),
+                    current_round=next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS,
+                    counter_offer=counter_offer,
+                    history=history + [{"role": user_role, "content": agent_text, "round": pvp_round}],
+                    progress_callback=None,
+                    role=next_turn,
+                )
+            except Exception as e:
+                print(f"⚠️ [PvP BG] Chip generation failed: {e}")
+            if not chips:
+                chips = _default_chips(next_turn, next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS)
+    except Exception as e:
+        print(f"⚠️ [PvP BG] Background work error: {e}")
+        if game_state == "active" and not chips:
+            try:
+                chips = _default_chips(next_turn, next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS)
+            except Exception:
+                chips = None
+    finally:
+        try:
+            final_update: Dict[str, Any] = {
+                "nextChips": chips if game_state == "active" else None,
+                "turnStatus": "waiting",
+            }
+            # Only clear mediatorPhase if mediator actually ran (game was active).
+            # If game_state == "pending_accept", leave mediatorPhase=True so that
+            # continue-negotiation can pick it up and run the mediator on resume.
+            if game_state == "active":
+                final_update["mediatorPhase"] = False
+            case_ref.update(final_update)
+            print(f"✅ [PvP BG] Final update done. turnStatus=waiting, chips={'set' if chips else 'null'}, mediatorDeferred={game_state != 'active' and is_mediator_round}")
+        except Exception as e:
+            print(f"❌ [PvP BG] Failed to write final update: {e}")
+
 
 # =============================================================================
 # PvP: Single-Side Negotiation Turn
@@ -1429,16 +1534,11 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
                 gen_executor.shutdown(wait=False, cancel_futures=True)
 
             try:
-                cleaned = raw_response.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                elif cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
-
+                cleaned = _extract_json_from_text(raw_response)
                 response_json = json.loads(cleaned)
                 agent_text = response_json.get("message", cleaned)
                 if user_role == "defendant":
-                    game_eval = evaluate_game_state(response_json, floor_price or 0)
+                    game_eval = evaluate_game_state(response_json, floor_price or 0, current_round=pvp_round, max_rounds=MAX_ROUNDS)
                     counter_offer = game_eval["offer_amount"]
                 else:
                     counter_offer = response_json.get("counter_offer_rm")
@@ -1510,17 +1610,12 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         })
 
         # =====================================================================
-        # Step 8: Inject mediator after round 2 completes (both sides done)
+        # Step 8: Evaluate game state
         # =====================================================================
         mediator_already_injected = any(m.get("role") == "mediator" for m in history)
-        if user_role == "defendant" and pvp_round == 2 and not mediator_already_injected:
-            emit("mediator", "⚖️ Mediator is reviewing the case...")
-            mediator_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
-            inject_mediator_guidance(case_id, case_data_dict, mediator_history)
+        is_mediator_round = (user_role == "defendant" and pvp_round == 2
+                             and not mediator_already_injected)
 
-        # =====================================================================
-        # Step 9: Evaluate game state
-        # =====================================================================
         game_state = "active"
 
         if user_role == "defendant" and game_eval.get("meets_floor"):
@@ -1529,17 +1624,19 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             print(f"⏳ PvP: Plaintiff decision required! Offer ({counter_offer}) meets floor ({floor_price})")
 
         if user_role == "plaintiff" and counter_offer is not None and game_state == "active":
-            defendant_ceiling = int(case_data_dict.get("defendantCeilingPrice") or 0)
+            defendant_ceiling = int(case_data.get("defendantCeilingPrice") or 0)
             if defendant_ceiling > 0 and counter_offer <= defendant_ceiling:
                 game_state = "pending_accept"
                 case_ref.update({"game_state": "pending_accept", "pendingDecisionRole": "defendant"})
                 print(f"⏳ PvP: Defendant decision required! Plaintiff offer ({counter_offer}) within ceiling ({defendant_ceiling})")
 
         if next_round > MAX_ROUNDS:
-            if game_state != "settled" and game_state != "pending_accept":
+            next_round = MAX_ROUNDS  # Never write round 5+ to Firestore
+            # At the final round, ALWAYS force the final accept/reject screen.
+            # This overrides pending_accept too — no "Continue Negotiation" at round 4.
+            if game_state != "settled":
                 game_state = "pending_decision"
-                next_round = MAX_ROUNDS
-                print(f"⏰ Max rounds reached. Awaiting user decision...")
+                print(f"⏰ Round {pvp_round} is the last round. Forcing final accept/reject decision screen.")
 
         case_status = "active"
         if game_state == "settled":
@@ -1550,34 +1647,34 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             case_status = "pending_accept"
 
         # =====================================================================
-        # Step 10: Generate chips for the NEXT player (sequential)
-        # =====================================================================
-        chips = None
-        if game_state == "active":
-            updated_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
-            chips = generate_strategy_chips(
-                case_title=case_title,
-                current_round=next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS,
-                counter_offer=counter_offer,
-                history=updated_history,
-                progress_callback=progress_callback,
-                role=next_turn,
-            )
-
-        # =====================================================================
-        # Step 11: Update case doc — flip turn
+        # Step 9: Early Firestore update — flip turn, chips=None (Phase 1 end)
+        # Background thread (Phase 2) will set nextChips + turnStatus="waiting"
         # =====================================================================
         case_ref.update({
             "currentTurn": next_turn,
-            "turnStatus": "waiting",
             "pvpRound": next_round,
+            "turnStatus": "processing",   # Phase 2 will flip to "waiting"
             "status": case_status,
             "game_state": game_state,
-            "nextChips": chips if game_state == "active" else None,
+            "mediatorPhase": is_mediator_round,
         })
 
+        # =====================================================================
+        # Step 10: Launch Phase 2 background thread (chips + mediator + final)
+        # =====================================================================
+        bg_thread = threading.Thread(
+            target=_pvp_background_work,
+            args=(
+                case_ref, case_id, case_data_dict, history, agent_text,
+                user_role, pvp_round, next_turn, next_round,
+                game_state, is_mediator_round, counter_offer,
+            ),
+            daemon=True,
+        )
+        bg_thread.start()
+
         emit("complete", "Turn complete!")
-        print(f"✅ [PvP Round {pvp_round}] {user_role} turn complete. Next: {next_turn}, Round: {next_round}")
+        print(f"✅ [PvP Round {pvp_round}] {user_role} turn complete. Next: {next_turn}, Round: {next_round}. BG thread started.")
 
         pending_decision_role = None
         if game_state == "pending_accept":
@@ -1595,7 +1692,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "counter_offer_rm": counter_offer,
             "game_state": game_state,
             "citations_found": audit_result.get("citations_found", []),
-            "chips": chips,
+            "chips": None,
             "current_turn": next_turn,
             "pending_decision_role": pending_decision_role,
         }

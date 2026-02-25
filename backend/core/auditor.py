@@ -126,7 +126,9 @@ def extract_citations_with_regex(agent_text: str) -> List[Dict[str, str]]:
 def _build_search_query(citation: Dict[str, str]) -> str:
     if citation["type"] == "order_rule":
         return f"Rules of Court {citation['law']} rule {citation['section']}"
-    return f"{citation['law']} section {citation['section']}"
+    # Remove subsection in brackets for query
+    section = citation["section"].split("(")[0].strip()
+    return f"{citation['law']} section {section}"
 
 
 def _match_citation_against_record(citation: Dict[str, str], match: Dict[str, Any]) -> bool:
@@ -140,7 +142,8 @@ def _match_citation_against_record(citation: Dict[str, str], match: Dict[str, An
     text = _normalize(str(metadata.get("text", "")))
 
     citation_law = _normalize(citation["law"])
-    citation_section = _normalize(citation["section"])
+    # Remove subsection in brackets for matching
+    citation_section = _normalize(citation["section"].split("(")[0].strip())
 
     if citation["type"] == "order_rule":
         if "order 93" in source and section == citation_section:

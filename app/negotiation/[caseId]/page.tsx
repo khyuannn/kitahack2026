@@ -26,6 +26,7 @@ interface TurnResponse {
   agent_message: string;
   plaintiff_message: string | null;
   current_round: number;
+  display_round?: number;
   audio_url: string | null;
   auditor_passed: boolean;
   auditor_warning: string | null;
@@ -81,6 +82,8 @@ interface CaseData {
   nextChips?: ChipOptions | null;
   defendantCeilingPrice?: number;
   pendingDecisionRole?: string | null;
+  mediatorPhase?: boolean;
+  displayRound?: number;
 }
 
 export default function NegotiationPageWrapper() {
@@ -139,7 +142,12 @@ function NegotiationPage() {
   const [mediatorShown, setMediatorShown] = useState(false);
   const [mediatorAutoTriggered, setMediatorAutoTriggered] = useState(false);
   const [mediatorGenerating, setMediatorGenerating] = useState(false);
+  const [roundInitialized, setRoundInitialized] = useState(false);
   const pendingRoundRef = useRef<number | null>(null);
+  const mediatorRetryRef = useRef(0);
+  // displayRound = the round the user is about to play. Updated atomically
+  // with chips from the backend so the badge always reflects the upcoming round.
+  const [displayRound, setDisplayRound] = useState(1);
 
   // Modals
   const [showEvidence, setShowEvidence] = useState(false);
@@ -160,6 +168,10 @@ function NegotiationPage() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pendingOpeningMessage, setPendingOpeningMessage] = useState<{ content: string; offer?: number | null } | null>(null);
   const pvpJoinedRef = React.useRef(false);
+
+  // Continue-negotiation spinner: stay in sending state until real chips arrive via Firestore
+  const continueModeRef = useRef(false);
+  const continueFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Draggable mobile evidence drawer FAB
   const [folderFabPos, setFolderFabPos] = useState<{ x: number; y: number } | null>(null);
@@ -422,6 +434,21 @@ function NegotiationPage() {
     setSelectedChip(null);
   }, [isPvp, isMyTurn, userRole, sending, defendantJoined, caseData?.nextChips]);
 
+  /* ── Continue-negotiation: exit spinner when real chips arrive via Firestore ── */
+  useEffect(() => {
+    if (!continueModeRef.current) return;
+    const generated = caseData?.nextChips;
+    if (generated?.question && Array.isArray(generated.options) && generated.options.length > 0) {
+      if (continueFallbackRef.current) clearTimeout(continueFallbackRef.current);
+      continueModeRef.current = false;
+      setChips(generated);
+      setSelectedChip(null);
+      setSending(false);
+      setProgressStep(null);
+      setDecidingReject(false);
+    }
+  }, [caseData?.nextChips]);
+
   /* ── PvP: Defensively clear chips when defendant hasn't joined ── */
   useEffect(() => {
     if (isPvp && !defendantJoined) {
@@ -455,15 +482,19 @@ function NegotiationPage() {
       setCurrentRound(caseData.pvpRound);
     }
 
+    // AI mode: sync displayRound from Firestore (survives page refresh)
+    if (!isPvp && typeof caseData.displayRound === "number" && caseData.displayRound > 0) {
+      setDisplayRound(caseData.displayRound);
+    }
+
     const stateFromCase =
-      caseData.game_state ||
-      (caseData.status === "done"
+      caseData.status === "done"
         ? "settled"
         : caseData.status === "deadlock"
         ? "deadlock"
         : caseData.status === "pending_decision"
         ? "pending_decision"
-        : null);
+        : caseData.game_state || null;
 
     if (stateFromCase) {
       setGameState(stateFromCase);
@@ -541,13 +572,41 @@ function NegotiationPage() {
     setShowDecision(false);
   }, [gameState, isPvp, userRole, pendingDecisionRole]);
 
+  /* ── AI mode: Infer current round from messages on initial page load ── */
+  useEffect(() => {
+    if (isPvp || roundInitialized || !messages.length) return;
+    setRoundInitialized(true);
+    const msgsWithRound = messages.filter((m) => typeof m.round === "number");
+    if (!msgsWithRound.length) return;
+    const maxRound = Math.max(...msgsWithRound.map((m) => m.round as number));
+    // Math.ceil handles mediator's round 2.5 → 3
+    const inferred = Math.min(Math.ceil(maxRound), 4);
+    if (inferred > currentRound) setCurrentRound(inferred);
+    // Also infer displayRound from plaintiff message count (next round to play)
+    // Only if Firestore displayRound isn't set yet (legacy cases)
+    if (!caseData?.displayRound) {
+      const plaintiffCount = messages.filter((m) => m.role === "plaintiff").length;
+      const inferredDisplay = Math.min(plaintiffCount + 1, 4);
+      if (inferredDisplay > displayRound) setDisplayRound(inferredDisplay);
+    }
+  }, [messages, isPvp, roundInitialized, currentRound, caseData?.displayRound, displayRound]);
+
   /* ── Track mediator appearance for chip gating ── */
   useEffect(() => {
     if (messages.some((m) => m.role === "mediator")) {
       setMediatorShown(true);
-      setMediatorGenerating(false);
+      // Don't clear mediatorGenerating here — let the dedicated effect below
+      // handle it once displayRound has caught up to >= 3, so the badge stays
+      // on "Mediator Intervention" instead of briefly falling back to "Round 2".
     }
   }, [messages]);
+
+  /* ── Clear mediatorGenerating only after displayRound reaches 3 ── */
+  useEffect(() => {
+    if (mediatorGenerating && mediatorShown && displayRound >= 3) {
+      setMediatorGenerating(false);
+    }
+  }, [mediatorGenerating, mediatorShown, displayRound]);
 
   useEffect(() => {
     return () => {
@@ -650,6 +709,10 @@ function NegotiationPage() {
                 else setPendingDecisionRole(null);
                 // In PvP, chips for the next player come via Firestore/effect — skip here
                 if (!isPvp) {
+                  // Update displayRound atomically with chips — ensures badge
+                  // always reflects the round the new chips belong to.
+                  const nextDisplayRound = data.display_round ?? data.current_round;
+                  setDisplayRound(nextDisplayRound);
                   if (data.chips?.question && data.chips?.options?.length > 0) {
                     setChips(data.chips);
                   } else if (data.game_state === "active") {
@@ -680,6 +743,9 @@ function NegotiationPage() {
                 if (!data.auditor_passed && data.auditor_warning) {
                   setAuditorWarning(data.auditor_warning);
                 }
+                // Update round immediately so the header reflects the new round
+                // as soon as the result arrives (not delayed until stream closes).
+                setCurrentRound(data.current_round);
                 pendingRoundRef.current = data.current_round;
               } else if (event.type === "error") {
                 throw new Error(event.message);
@@ -700,10 +766,7 @@ function NegotiationPage() {
         await new Promise((r) => setTimeout(r, 4000));
       } finally {
         clearTimeout(timeoutId);
-        if (pendingRoundRef.current !== null) {
-          setCurrentRound(pendingRoundRef.current);
-          pendingRoundRef.current = null;
-        }
+        pendingRoundRef.current = null;
         setSending(false);
         setProgressStep(null);
         setInput("");
@@ -754,13 +817,53 @@ function NegotiationPage() {
   };
 
   const handleContinueNegotiation = async () => {
-    setDecidingReject(true);
+    // Close the decision panel and enter the deliberating spinner state.
+    // We stay in sending=true until real chips arrive via Firestore (written by
+    // the background thread on the backend). No default chips are shown first.
+    setShowDecision(false);
+    setGameState("active");
+    setPendingDecisionRole(null);
+    setSending(true);
+    setProgressStep("Agent deliberating...");
+    setChips(null);
+    continueModeRef.current = true;
+    // If a mediator review was deferred, activate the amber mediator spinner
+    if (caseData?.mediatorPhase) setMediatorGenerating(true);
+
+    // Safety fallback: if real chips don't arrive within 30 s, show defaults
+    if (continueFallbackRef.current) clearTimeout(continueFallbackRef.current);
+    continueFallbackRef.current = setTimeout(() => {
+      if (!continueModeRef.current) return;
+      continueModeRef.current = false;
+      setChips(userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS);
+      setSelectedChip(null);
+      setSending(false);
+      setProgressStep(null);
+      setDecidingReject(false);
+    }, 30000);
+
     try {
-      await fetch(`/api/cases/${caseId}/continue-negotiation`, { method: "POST" });
-      setGameState("active");
-      setPendingDecisionRole(null);
-      setShowDecision(false);
-    } finally {
+      const backendBaseUrl =
+        process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
+        (typeof window !== "undefined" && window.location.hostname === "localhost"
+          ? "http://127.0.0.1:8005"
+          : "");
+      const url = backendBaseUrl
+        ? `${backendBaseUrl}/api/cases/${caseId}/continue-negotiation`
+        : `/api/cases/${caseId}/continue-negotiation`;
+      await fetch(url, { method: "POST" });
+      // Backend clears nextChips and starts background generation.
+      // The useEffect above watches caseData?.nextChips and will exit
+      // continue mode (setSending(false), setChips) when real chips arrive.
+      setProgressStep("Generating strategic options...");
+    } catch (err: any) {
+      console.error("Continue negotiation error:", err);
+      if (continueFallbackRef.current) clearTimeout(continueFallbackRef.current);
+      continueModeRef.current = false;
+      setChips(userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS);
+      setSelectedChip(null);
+      setSending(false);
+      setProgressStep(null);
       setDecidingReject(false);
     }
   };
@@ -865,9 +968,16 @@ function NegotiationPage() {
   const isActive = gameState === "active";
   const isSettled = gameState === "settled";
   const isDeadlock = gameState === "deadlock";
-  const mediatorGatePassed = currentRound < 3 || mediatorShown;
+  const pvpMediatorPhase = isPvp && (caseData?.mediatorPhase === true);
+  const isChipGenerating = isPvp
+    && (
+      pvpMediatorPhase
+      || (caseData?.currentTurn === userRole && caseData?.turnStatus === "processing")
+    );
+  const mediatorGatePassed = currentRound < 3 || mediatorShown || pvpMediatorPhase;
   const commanderInputEnabled = isActive && mediatorGatePassed && (!isPvp || (isMyTurn && defendantJoined));
-  const currentRoundDisplay = isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound;
+  const currentRoundDisplay = Math.min(isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound, 4);
+  const isPendingAcceptWaiting = isPvp && gameState === "pending_accept" && pendingDecisionRole !== userRole;
 
   /* ── Mediator auto-trigger (AI mode only) ── */
   useEffect(() => {
@@ -875,11 +985,11 @@ function NegotiationPage() {
     if (!isActive || sending || showDecision || mediatorShown) return;
     if (currentRound !== 2 || mediatorAutoTriggered) return;
 
-    setMediatorAutoTriggered(true);
-    setMediatorGenerating(true);
+    setMediatorAutoTriggered(true);  // Prevent re-entry immediately
     setSelectedChip(null);
     setChips(null);
-    handleSend("");
+    setMediatorGenerating(true);  // Show "Mediator Intervention" badge immediately
+    handleSend("");  // Start backend immediately (no delay)
   }, [
     isActive,
     sending,
@@ -893,6 +1003,20 @@ function NegotiationPage() {
   useEffect(() => {
     if (mediatorShown) setMediatorAutoTriggered(true);
   }, [mediatorShown]);
+
+  /* ── Retry mediator trigger if send finished but mediator never appeared ── */
+  useEffect(() => {
+    if (isPvp || sending || !mediatorAutoTriggered || mediatorShown || currentRound !== 2) return;
+    // If backend already returned a round > 2, the mediator turn succeeded — don't re-arm
+    if (pendingRoundRef.current !== null && pendingRoundRef.current > 2) return;
+    if (displayRound > 2) return;
+    // Auto-trigger ran but mediator message not in Firestore — allow up to 2 retries
+    if (mediatorRetryRef.current < 2) {
+      mediatorRetryRef.current += 1;
+      setMediatorGenerating(false);
+      setMediatorAutoTriggered(false);
+    }
+  }, [sending, mediatorAutoTriggered, mediatorShown, isPvp, currentRound, displayRound]);
 
   /* ── Loading state ── */
   if (caseLoading || messagesLoading) {
@@ -1092,13 +1216,13 @@ function NegotiationPage() {
             </h1>
             <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider">
               <span className="text-sm text-gray-700">
-                {mediatorGenerating
+                {pvpMediatorPhase || mediatorGenerating
                   ? "Mediator Intervention"
-                  : `Round ${currentRoundDisplay}`}
+                  : `Round ${isPvp ? currentRoundDisplay : displayRound}`}
               </span>{" "}
               &middot; {" "}
               {isSettled ? "Settled" : isDeadlock ? "Deadlock" : isPvp ? `${userRole === "plaintiff" ? "Plaintiff" : "Defendant"}` : "Active"}
-              {isPvp && isActive && (
+              {isPvp && isActive && !sending && (
                 <span className={isMyTurn ? "text-green-600" : "text-amber-500"}>
                   {" "}&middot; {isMyTurn ? "Your Turn" : "Opponent's Turn"}
                 </span>
@@ -1155,9 +1279,9 @@ function NegotiationPage() {
                 textShadow: "0 0 10px rgba(200,170,60,0.45), 0 1px 2px rgba(0,0,0,0.4)",
               }}
             >
-              {mediatorGenerating
+              {pvpMediatorPhase || mediatorGenerating
                 ? "Mediator Intervention"
-                : `Round ${currentRoundDisplay}`}
+                : `Round ${isPvp ? currentRoundDisplay : displayRound}`}
             </p>
           </div>
         </div>
@@ -1489,6 +1613,8 @@ function NegotiationPage() {
               <div className={`border rounded-2xl px-6 py-4 max-w-[80%] shadow-sm ${
                 progressStep?.startsWith("\u274c") || progressStep?.startsWith("\u26a0")
                   ? "bg-gradient-to-r from-red-50 to-yellow-50 border-red-200"
+                  : (mediatorGenerating && !mediatorShown)
+                  ? "bg-gradient-to-r from-amber-50 to-yellow-50 border-amber-200"
                   : "bg-gradient-to-r from-gray-50 to-indigo-50 border-gray-200"
               }`}>
                 <div className="flex items-center gap-3 mb-2">
@@ -1498,30 +1624,54 @@ function NegotiationPage() {
                     <span className="material-icons text-yellow-500" style={{ fontSize: 20 }}>warning</span>
                   ) : (
                     <div className="relative w-5 h-5">
-                      <div className="absolute inset-0 border-2 border-indigo-200 rounded-full" />
-                      <div className="absolute inset-0 border-2 border-indigo-500 rounded-full border-t-transparent animate-spin" />
+                      <div className={`absolute inset-0 border-2 ${(mediatorGenerating && !mediatorShown) ? 'border-amber-200' : 'border-indigo-200'} rounded-full`} />
+                      <div className={`absolute inset-0 border-2 ${(mediatorGenerating && !mediatorShown) ? 'border-amber-500' : 'border-indigo-500'} rounded-full border-t-transparent animate-spin`} />
                     </div>
                   )}
                   <p className={`text-xs font-bold uppercase tracking-wider ${
                     progressStep?.startsWith("\u274c") ? "text-red-600"
                     : progressStep?.startsWith("\u26a0") ? "text-yellow-600"
+                    : (mediatorGenerating && !mediatorShown) ? "text-amber-700"
                     : "text-indigo-600"
                   }`}>
-                    {progressStep?.startsWith("\u274c") ? "Error" : progressStep?.startsWith("\u26a0") ? "Warning" : "Agents Deliberating"}
+                    {progressStep?.startsWith("\u274c") ? "Error" : progressStep?.startsWith("\u26a0") ? "Warning" : (mediatorGenerating && !mediatorShown) ? "⚖️ Mediator Reviewing Case" : "Agents Deliberating"}
                   </p>
                   <span className="text-[10px] text-gray-400 tabular-nums ml-auto">
                     {Math.floor(elapsedSecs / 60)}:{String(elapsedSecs % 60).padStart(2, "0")}
                   </span>
                 </div>
-                {progressStep && (
+                {(progressStep || (mediatorGenerating && !mediatorShown)) && (
                   <p className={`text-sm font-medium pl-8 ${
                     progressStep?.startsWith("\u274c") ? "text-red-600"
                     : progressStep?.startsWith("\u26a0") ? "text-yellow-600"
+                    : (mediatorGenerating && !mediatorShown) ? "text-amber-600 animate-pulse"
                     : "text-gray-600 animate-pulse"
                   }`}>
-                    {progressStep}
+                    {(mediatorGenerating && !mediatorShown) && !progressStep?.startsWith("\u274c") && !progressStep?.startsWith("\u26a0")
+                      ? "The mediator is analyzing both positions..."
+                      : progressStep}
                   </p>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* PvP: Chip generation / mediator spinner (shown on the next player's screen while backend prepares chips or mediator reviews) */}
+          {isChipGenerating && !sending && (
+            <div className="flex justify-center">
+              <div className={`border rounded-2xl px-6 py-4 max-w-[80%] shadow-sm ${pvpMediatorPhase ? 'bg-gradient-to-r from-amber-50 to-yellow-50 border-amber-200' : 'bg-gradient-to-r from-gray-50 to-indigo-50 border-gray-200'}`}>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="relative w-5 h-5">
+                    <div className={`absolute inset-0 border-2 ${pvpMediatorPhase ? 'border-amber-200' : 'border-indigo-200'} rounded-full`} />
+                    <div className={`absolute inset-0 border-2 ${pvpMediatorPhase ? 'border-amber-500' : 'border-indigo-500'} rounded-full border-t-transparent animate-spin`} />
+                  </div>
+                  <p className={`text-xs font-bold uppercase tracking-wider ${pvpMediatorPhase ? 'text-amber-700' : 'text-indigo-600'}`}>
+                    {pvpMediatorPhase ? '⚖️ Mediator Reviewing Case' : 'Agents Deliberating'}
+                  </p>
+                </div>
+                <p className={`text-sm font-medium pl-8 ${pvpMediatorPhase ? 'text-amber-600' : 'text-gray-600'} animate-pulse`}>
+                  {pvpMediatorPhase ? 'The mediator is analyzing both positions...' : 'Preparing your strategic options...'}
+                </p>
               </div>
             </div>
           )}
@@ -1847,7 +1997,7 @@ function NegotiationPage() {
         )}
 
         {/* ── PvP: Waiting for opponent's move ── */}
-        {isPvp && isActive && !isMyTurn && !sending && defendantJoined && (
+        {isPvp && !sending && defendantJoined && ((isActive && !isMyTurn) || isPendingAcceptWaiting) && (
           <div className="px-5 py-4 bg-amber-50 border-t border-amber-200 text-center">
             <div className="flex items-center justify-center gap-2 mb-1">
               <div className="relative w-4 h-4">
@@ -1864,14 +2014,23 @@ function NegotiationPage() {
           </div>
         )}
 
-        {/* ── PvP: Turn is being processed ── */}
-        {isPvp && caseData?.turnStatus === "processing" && !sending && (
-          <div className="px-5 py-3 bg-indigo-50 border-t border-indigo-100 text-center">
-            <p className="text-xs text-indigo-500 animate-pulse">
-              AI agents are deliberating...
+        {isPvp && gameState === "pending_decision" && userRole === "defendant" && !sending && (
+          <div className="px-5 py-4 bg-amber-50 border-t border-amber-200 text-center">
+            <div className="flex items-center justify-center gap-2 mb-1">
+              <div className="relative w-4 h-4">
+                <div className="absolute inset-0 border-2 border-amber-300 rounded-full" />
+                <div className="absolute inset-0 border-2 border-amber-500 rounded-full border-t-transparent animate-spin" />
+              </div>
+              <p className="text-xs font-bold text-amber-700 uppercase tracking-wider">
+                Waiting for opponent&apos;s final decision...
+              </p>
+            </div>
+            <p className="text-[10px] text-amber-500">
+              You&apos;ll see the outcome once the plaintiff decides
             </p>
           </div>
         )}
+
 
         {/* ── Evidence Modal ── */}
         <EvidenceModal

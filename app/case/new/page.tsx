@@ -72,6 +72,14 @@ export default function SelectDisputeTypePage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        <button
+          onClick={() => router.push("/login")}
+          className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
+        >
+          <span className="material-icons text-sm mr-1">arrow_back</span>
+          Back to Login
+        </button>
+
         {/* Step indicator */}
         <div className="flex items-center gap-2 mb-4">
           <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded">Step 1</span>

@@ -158,6 +158,7 @@ class TurnResponse(BaseModel):
     agent_message: str = Field(..., description="AI defendant's (opponent) message.")
     plaintiff_message: Optional[str] = Field(default=None, description="AI plaintiff's (your agent) message.")
     current_round: int = Field(default=1, description="Authoritative round number from backend.")
+    display_round: Optional[int] = Field(default=None, description="Round to display on the badge (the upcoming round).")
     #audio playback
     audio_url: Optional[str] = Field(default=None, description="firebase storage URI for TTS audio of agent_message.")
     #auditor feedback (M2's validation)

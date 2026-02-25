@@ -33,7 +33,7 @@ def extract_evidence_facts(file_path):
     with open(file_path, "rb") as f:
         image_data = f.read()
         
-    model_name = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     response = client.models.generate_content(
       model=model_name,

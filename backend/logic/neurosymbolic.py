@@ -21,23 +21,32 @@ def _to_int_offer(value: Any) -> Optional[int]:
     return None
 
 
-def evaluate_game_state(agent_output: Dict[str, Any], floor_price: int) -> Dict[str, Any]:
+def evaluate_game_state(agent_output: Dict[str, Any], floor_price: int, current_round: int = 1, max_rounds: int = 4) -> Dict[str, Any]:
     """
     Evaluates offer state using structured model output, e.g.:
     {
       "message": "...",
       "counter_offer_rm": 1500
     }
+    
+    At the final round (current_round >= max_rounds), always report
+    has_offer=True so the accept/reject UI is shown regardless of
+    whether the offer meets the floor price.
     """
     offer = _to_int_offer(agent_output.get("counter_offer_rm"))
 
     if offer is None:
-        return {"has_offer": False, "offer_amount": None, "meets_floor": False}
+        # Even with no numeric offer at the final round, signal that
+        # the negotiation must end so the decision screen appears.
+        if current_round >= max_rounds:
+            return {"has_offer": False, "offer_amount": None, "meets_floor": False, "final_round": True}
+        return {"has_offer": False, "offer_amount": None, "meets_floor": False, "final_round": False}
 
     return {
         "has_offer": True,
         "offer_amount": offer,
         "meets_floor": offer >= floor_price,
+        "final_round": current_round >= max_rounds,
     }
 
 
