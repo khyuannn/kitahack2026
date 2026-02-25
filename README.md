@@ -30,6 +30,12 @@ In **PvP mode** (the primary mode), both parties join the same case via an invit
 
 **AI mode** is available for single-user testing: the user commands the Plaintiff AI while the system auto-plays the Defendant AI.
 
+Currently supported dispute categories:
+
+- **Tenancy and Rental Disputes** — security deposit refunds, unpaid rent, property damage claims
+- **Consumer and E-Commerce Disputes** — defective goods, items not as described, fake products (e.g., Shopee, Carousell)
+- **Freelance and Unpaid Services** — unpaid invoices, breach of service agreement, failure to deliver
+
 ### SDG Alignment
 
 | SDG | Relevance |
@@ -43,7 +49,7 @@ In **PvP mode** (the primary mode), both parties join the same case via an invit
 
 - **Adversarial AI Negotiation** — Plaintiff AI and Defendant AI argue opposing positions across up to 4 rounds, with BATNA and game-theory prompting for realistic negotiation dynamics
 - **PvP Mode (Primary)** — Two humans each command their own AI agent via strategy chips and text directives; humans provide strategy, AI provides legal expertise (human-in-the-loop)
-- **RAG on Malaysian Contracts Act 1950** — Pinecone vector DB with Gemini Embedding-001; agentic self-querying generates 3–5 legal search queries per turn
+- **RAG on Malaysian Statutes** — Pinecone vector DB with Gemini Embedding-001 covering Contracts Act 1950, Consumer Protection Act 1999, Sale of Goods Act 1957, Limitation Act 1953, Order 93 (Rules of Court 2012), and tenancy law snippets; agentic self-querying generates 3–5 legal search queries per turn
 - **Legal Citation Auditor** — Regex extraction + Pinecone score validation on every generated message; invalid citations trigger regeneration (max 2 retries) or surface an `auditor_warning` to the user
 - **Google Cloud TTS** — Distinct Neural2 voices per role (plaintiff, defendant, mediator)
 - **Settlement Agreement PDF** — Auto-generated legally-formatted document on successful resolution
@@ -95,7 +101,7 @@ The Next.js frontend proxies all `/api/*` requests to the FastAPI backend. Fires
 | Backend | FastAPI (Python), Uvicorn |
 | AI / ML | LangChain (document loaders, embeddings), LangGraph (Phase 2 roadmap) |
 | Vector DB | Pinecone (serverless, dotproduct metric, 768-dim) |
-| Law Data | Malaysian Contracts Act 1950 (PDF ingested into Pinecone) |
+| Law Data | Contracts Act 1950, Consumer Protection Act 1999, Sale of Goods Act 1957, Limitation Act 1953, Order 93 (Rules of Court 2012), tenancy law snippets — all ingested into Pinecone |
 | PDF Export | html2pdf.js (settlement agreement + court filing) |
 
 ---
