@@ -58,12 +58,22 @@ export default function LoginPage() {
   return (
     <div className="bg-off-white min-h-screen flex items-center justify-center p-6">
       <div className="w-full max-w-[440px] md:max-w-lg flex flex-col items-center">
+        <div className="w-full mb-6">
+          <button
+            onClick={() => router.push("/")}
+            className="inline-flex items-center text-text-secondary-light text-xs font-semibold hover:text-primary transition-colors uppercase tracking-wide"
+          >
+            <span className="material-icons text-sm mr-1">arrow_back</span>
+            Back to Home
+          </button>
+        </div>
+
         {/* Logo & Branding */}
         <div className="text-center mb-10">
           <div className="inline-flex items-center justify-center w-12 h-12 bg-primary text-white rounded-lg mb-4">
             <span className="material-symbols-outlined text-2xl">balance</span>
           </div>
-          <h1 className="text-3xl font-serif tracking-tight text-primary mb-2">Lex-Machina</h1>
+          <h1 className="text-3xl font-serif tracking-tight text-primary mb-2">LexSuluh</h1>
           <p className="text-gray-500 text-sm font-medium">Malaysian Settlement Platform</p>
         </div>
 

@@ -1,4 +1,4 @@
-Lex-Machina: Phase 2 Master Execution Plan
+LexSuluh: Phase 2 Master Execution Plan
 Goal: Transform the Phase 1 skeleton into a Turn-Based Cognitive Architecture featuring Evidence Validation, a "Human-in-the-Loop" Auditor, Strategic Chips, and Real-Time Multiplayer UI.
 Core Philosophy: "The Commander's Console" + "Safe Auditor."
 Commander's Console: The user is the Commander. The AI is the weapon. The user can upload evidence mid-battle and give direct orders that the AI must obey.

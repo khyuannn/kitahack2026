@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Lex-Machina - Create New Case</title>
+<title>LexSuluh - Create New Case</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet"/>
@@ -58,7 +58,7 @@
 <div class="w-10 h-10 bg-[#1a1a1a] dark:bg-black rounded-lg flex items-center justify-center shrink-0">
 <span class="material-icons text-white text-xl">balance</span>
 </div>
-<h1 class="font-display text-2xl font-bold text-black dark:text-white tracking-wide">Lex-Machina</h1>
+<h1 class="font-display text-2xl font-bold text-black dark:text-white tracking-wide">LexSuluh</h1>
 </header>
 <main class="flex-1 px-6 pt-8 pb-12 overflow-y-auto">
 <div class="flex items-center gap-2 mb-4">

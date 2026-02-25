@@ -57,14 +57,25 @@ export default function UploadEvidencePage() {
     <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-44">
       <div className="w-full">
         {/* Header */}
-        <header className="px-6 py-5 border-b border-gray-100 flex items-center gap-4 bg-white sticky top-0 z-10">
-          <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center shrink-0">
-            <span className="material-icons text-white text-xl">balance</span>
+        <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
+          <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
+            <div className="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
+              <span className="material-icons-round text-white text-2xl">balance</span>
+            </div>
+            <h1 className="font-serif font-bold text-2xl tracking-tight text-black">LexSuluh</h1>
           </div>
-          <h1 className="font-display text-2xl font-bold text-black tracking-wide">Lex-Machina</h1>
         </header>
 
         <main className="max-w-5xl mx-auto px-6 pt-8 pb-8">
+          {/* Back link */}
+          <button
+            onClick={() => router.push("/case/new/details")}
+            className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
+          >
+            <span className="material-icons text-sm mr-1">arrow_back</span>
+            Back to Details
+          </button>
+
           {/* Step indicator */}
           <div className="flex items-center gap-2 mb-4">
             <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded tracking-wide">
@@ -74,15 +85,6 @@ export default function UploadEvidencePage() {
               Of 4
             </span>
           </div>
-
-          {/* Back link */}
-          <button
-            onClick={() => router.push("/case/new/details")}
-            className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
-          >
-            <span className="material-icons text-sm mr-1">arrow_back</span>
-            Back to Details
-          </button>
 
           <div className="mb-8">
             <h2 className="font-display text-4xl font-bold text-gray-900 mb-2 leading-tight">
@@ -95,7 +97,7 @@ export default function UploadEvidencePage() {
 
           {/* Upload Zone */}
           <div
-            className={`border border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer max-w-3xl ${
+            className={`border border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer ${
               dragActive
                 ? "border-blue-500 bg-blue-50"
                 : "border-gray-200 hover:border-gray-300 bg-gray-50/80"
@@ -150,7 +152,7 @@ export default function UploadEvidencePage() {
               {files.map((file, index) => (
                 <div
                   key={index}
-                  className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100 max-w-3xl"
+                  className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100"
                 >
                   <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 shrink-0">
                     <span className="material-icons text-xl">{getFileIcon(file.name)}</span>
@@ -215,7 +217,7 @@ export default function UploadEvidencePage() {
               </a>
             </div>
             <div className="text-center">
-              <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+              <p className="text-[10px] text-gray-400">© 2026 LexSuluh</p>
             </div>
           </div>
         </footer>

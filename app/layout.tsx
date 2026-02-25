@@ -3,7 +3,7 @@ import "./globals.css";
 import { AuthProviderWrapper } from "./AuthProviderWrapper";
 
 export const metadata: Metadata = {
-  title: "Lex-Machina",
+  title: "LexSuluh",
   description: "Malaysian Settlement Platform",
 };
 

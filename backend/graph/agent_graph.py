@@ -33,7 +33,7 @@ except ImportError:
 
 # Initialize Gemini
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-MODEL = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 # =============================================================================

@@ -26,6 +26,7 @@ interface TurnResponse {
   agent_message: string;
   plaintiff_message: string | null;
   current_round: number;
+  display_round?: number;
   audio_url: string | null;
   auditor_passed: boolean;
   auditor_warning: string | null;
@@ -33,6 +34,7 @@ interface TurnResponse {
   game_state: string;
   counter_offer_rm: number | null;
   current_turn?: string;
+  pending_decision_role?: string | null;
 }
 
 interface AttachedEvidence {
@@ -78,6 +80,10 @@ interface CaseData {
   defendantIsAnonymous?: boolean;
   defendantResponded?: boolean;
   nextChips?: ChipOptions | null;
+  defendantCeilingPrice?: number;
+  pendingDecisionRole?: string | null;
+  mediatorPhase?: boolean;
+  displayRound?: number;
 }
 
 export default function NegotiationPageWrapper() {
@@ -136,7 +142,12 @@ function NegotiationPage() {
   const [mediatorShown, setMediatorShown] = useState(false);
   const [mediatorAutoTriggered, setMediatorAutoTriggered] = useState(false);
   const [mediatorGenerating, setMediatorGenerating] = useState(false);
+  const [roundInitialized, setRoundInitialized] = useState(false);
   const pendingRoundRef = useRef<number | null>(null);
+  const mediatorRetryRef = useRef(0);
+  // displayRound = the round the user is about to play. Updated atomically
+  // with chips from the backend so the badge always reflects the upcoming round.
+  const [displayRound, setDisplayRound] = useState(1);
 
   // Modals
   const [showEvidence, setShowEvidence] = useState(false);
@@ -158,6 +169,14 @@ function NegotiationPage() {
   const [pendingOpeningMessage, setPendingOpeningMessage] = useState<{ content: string; offer?: number | null } | null>(null);
   const pvpJoinedRef = React.useRef(false);
 
+  // Continue-negotiation spinner: stay in sending state until real chips arrive via Firestore
+  const continueModeRef = useRef(false);
+  const continueFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Draggable mobile evidence drawer FAB
+  const [folderFabPos, setFolderFabPos] = useState<{ x: number; y: number } | null>(null);
+  const folderFabDragRef = useRef({ dx: 0, dy: 0, moved: false, active: false });
+
   useEffect(() => {
     if (authLoading || uid) return;
     doAnonSignIn().catch((error) => {
@@ -172,10 +191,14 @@ function NegotiationPage() {
     return () => clearInterval(t);
   }, [sending]);
 
+  // Leave confirmation dialog
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+
   // Settlement decision (round 4.5)
   const [showDecision, setShowDecision] = useState(false);
   const [decidingAccept, setDecidingAccept] = useState(false);
   const [decidingReject, setDecidingReject] = useState(false);
+  const [pendingDecisionRole, setPendingDecisionRole] = useState<string | null>(null);
 
   const chatBoxRef = useRef<HTMLDivElement>(null);
 
@@ -411,6 +434,21 @@ function NegotiationPage() {
     setSelectedChip(null);
   }, [isPvp, isMyTurn, userRole, sending, defendantJoined, caseData?.nextChips]);
 
+  /* ── Continue-negotiation: exit spinner when real chips arrive via Firestore ── */
+  useEffect(() => {
+    if (!continueModeRef.current) return;
+    const generated = caseData?.nextChips;
+    if (generated?.question && Array.isArray(generated.options) && generated.options.length > 0) {
+      if (continueFallbackRef.current) clearTimeout(continueFallbackRef.current);
+      continueModeRef.current = false;
+      setChips(generated);
+      setSelectedChip(null);
+      setSending(false);
+      setProgressStep(null);
+      setDecidingReject(false);
+    }
+  }, [caseData?.nextChips]);
+
   /* ── PvP: Defensively clear chips when defendant hasn't joined ── */
   useEffect(() => {
     if (isPvp && !defendantJoined) {
@@ -444,19 +482,26 @@ function NegotiationPage() {
       setCurrentRound(caseData.pvpRound);
     }
 
+    // AI mode: sync displayRound from Firestore (survives page refresh)
+    if (!isPvp && typeof caseData.displayRound === "number" && caseData.displayRound > 0) {
+      setDisplayRound(caseData.displayRound);
+    }
+
     const stateFromCase =
-      caseData.game_state ||
-      (caseData.status === "done"
+      caseData.status === "done"
         ? "settled"
         : caseData.status === "deadlock"
         ? "deadlock"
         : caseData.status === "pending_decision"
         ? "pending_decision"
-        : null);
+        : caseData.game_state || null;
 
     if (stateFromCase) {
       setGameState(stateFromCase);
     }
+
+    if (caseData.pendingDecisionRole) setPendingDecisionRole(caseData.pendingDecisionRole);
+    else setPendingDecisionRole(null);
   }, [caseData]);
 
   /* ── Parse offers from message history ── */
@@ -516,26 +561,65 @@ function NegotiationPage() {
 
   /* ── Handle game_state changes ── */
   useEffect(() => {
+    if (gameState === "pending_accept") {
+      setShowDecision(pendingDecisionRole === userRole);
+      return;
+    }
     if (gameState === "pending_decision") {
       setShowDecision(!isPvp || userRole === "plaintiff");
       return;
     }
     setShowDecision(false);
-  }, [gameState, isPvp, userRole]);
+  }, [gameState, isPvp, userRole, pendingDecisionRole]);
+
+  /* ── AI mode: Infer current round from messages on initial page load ── */
+  useEffect(() => {
+    if (isPvp || roundInitialized || !messages.length) return;
+    setRoundInitialized(true);
+    const msgsWithRound = messages.filter((m) => typeof m.round === "number");
+    if (!msgsWithRound.length) return;
+    const maxRound = Math.max(...msgsWithRound.map((m) => m.round as number));
+    // Math.ceil handles mediator's round 2.5 → 3
+    const inferred = Math.min(Math.ceil(maxRound), 4);
+    if (inferred > currentRound) setCurrentRound(inferred);
+    // Also infer displayRound from plaintiff message count (next round to play)
+    // Only if Firestore displayRound isn't set yet (legacy cases)
+    if (!caseData?.displayRound) {
+      const plaintiffCount = messages.filter((m) => m.role === "plaintiff").length;
+      const inferredDisplay = Math.min(plaintiffCount + 1, 4);
+      if (inferredDisplay > displayRound) setDisplayRound(inferredDisplay);
+    }
+  }, [messages, isPvp, roundInitialized, currentRound, caseData?.displayRound, displayRound]);
 
   /* ── Track mediator appearance for chip gating ── */
   useEffect(() => {
     if (messages.some((m) => m.role === "mediator")) {
       setMediatorShown(true);
-      setMediatorGenerating(false);
+      // Don't clear mediatorGenerating here — let the dedicated effect below
+      // handle it once displayRound has caught up to >= 3, so the badge stays
+      // on "Mediator Intervention" instead of briefly falling back to "Round 2".
     }
   }, [messages]);
+
+  /* ── Clear mediatorGenerating only after displayRound reaches 3 ── */
+  useEffect(() => {
+    if (mediatorGenerating && mediatorShown && displayRound >= 3) {
+      setMediatorGenerating(false);
+    }
+  }, [mediatorGenerating, mediatorShown, displayRound]);
 
   useEffect(() => {
     return () => {
       stopCurrentAudio();
     };
   }, [stopCurrentAudio]);
+
+  // Init folder FAB to bottom-right corner (matches original fixed position)
+  useEffect(() => {
+    if (typeof window !== "undefined" && folderFabPos === null) {
+      setFolderFabPos({ x: window.innerWidth - 40, y: window.innerHeight - 104 });
+    }
+  }, []);
 
   /* ── Send directive (calls /api/cases/{caseId}/next-turn or pvp-turn with streaming) ── */
   const handleSend = useCallback(
@@ -547,7 +631,7 @@ function NegotiationPage() {
       setChips(null);
       setProgressStep("Connecting...");
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 190000);
+      const timeoutId = setTimeout(() => controller.abort(), 270000);
 
       try {
         const backendBaseUrl =
@@ -616,13 +700,19 @@ function NegotiationPage() {
             if (!line.trim()) continue;
             try {
               const event = JSON.parse(line);
-              if (event.type === "progress") {
+              if (event.type === "progress" && event.step !== "heartbeat") {
                 setProgressStep(event.message);
               } else if (event.type === "result") {
                 const data: TurnResponse = event.data;
                 setGameState(data.game_state);
+                if (data.pending_decision_role != null) setPendingDecisionRole(data.pending_decision_role);
+                else setPendingDecisionRole(null);
                 // In PvP, chips for the next player come via Firestore/effect — skip here
                 if (!isPvp) {
+                  // Update displayRound atomically with chips — ensures badge
+                  // always reflects the round the new chips belong to.
+                  const nextDisplayRound = data.display_round ?? data.current_round;
+                  setDisplayRound(nextDisplayRound);
                   if (data.chips?.question && data.chips?.options?.length > 0) {
                     setChips(data.chips);
                   } else if (data.game_state === "active") {
@@ -653,6 +743,9 @@ function NegotiationPage() {
                 if (!data.auditor_passed && data.auditor_warning) {
                   setAuditorWarning(data.auditor_warning);
                 }
+                // Update round immediately so the header reflects the new round
+                // as soon as the result arrives (not delayed until stream closes).
+                setCurrentRound(data.current_round);
                 pendingRoundRef.current = data.current_round;
               } else if (event.type === "error") {
                 throw new Error(event.message);
@@ -673,10 +766,7 @@ function NegotiationPage() {
         await new Promise((r) => setTimeout(r, 4000));
       } finally {
         clearTimeout(timeoutId);
-        if (pendingRoundRef.current !== null) {
-          setCurrentRound(pendingRoundRef.current);
-          pendingRoundRef.current = null;
-        }
+        pendingRoundRef.current = null;
         setSending(false);
         setProgressStep(null);
         setInput("");
@@ -722,6 +812,58 @@ function NegotiationPage() {
     } catch (err: any) {
       alert(err.message);
     } finally {
+      setDecidingReject(false);
+    }
+  };
+
+  const handleContinueNegotiation = async () => {
+    // Close the decision panel and enter the deliberating spinner state.
+    // We stay in sending=true until real chips arrive via Firestore (written by
+    // the background thread on the backend). No default chips are shown first.
+    setShowDecision(false);
+    setGameState("active");
+    setPendingDecisionRole(null);
+    setSending(true);
+    setProgressStep("Agent deliberating...");
+    setChips(null);
+    continueModeRef.current = true;
+    // If a mediator review was deferred, activate the amber mediator spinner
+    if (caseData?.mediatorPhase) setMediatorGenerating(true);
+
+    // Safety fallback: if real chips don't arrive within 30 s, show defaults
+    if (continueFallbackRef.current) clearTimeout(continueFallbackRef.current);
+    continueFallbackRef.current = setTimeout(() => {
+      if (!continueModeRef.current) return;
+      continueModeRef.current = false;
+      setChips(userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS);
+      setSelectedChip(null);
+      setSending(false);
+      setProgressStep(null);
+      setDecidingReject(false);
+    }, 30000);
+
+    try {
+      const backendBaseUrl =
+        process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
+        (typeof window !== "undefined" && window.location.hostname === "localhost"
+          ? "http://127.0.0.1:8005"
+          : "");
+      const url = backendBaseUrl
+        ? `${backendBaseUrl}/api/cases/${caseId}/continue-negotiation`
+        : `/api/cases/${caseId}/continue-negotiation`;
+      await fetch(url, { method: "POST" });
+      // Backend clears nextChips and starts background generation.
+      // The useEffect above watches caseData?.nextChips and will exit
+      // continue mode (setSending(false), setChips) when real chips arrive.
+      setProgressStep("Generating strategic options...");
+    } catch (err: any) {
+      console.error("Continue negotiation error:", err);
+      if (continueFallbackRef.current) clearTimeout(continueFallbackRef.current);
+      continueModeRef.current = false;
+      setChips(userRole === "defendant" ? DEFAULT_DEFENDANT_CHIPS : DEFAULT_CHIPS);
+      setSelectedChip(null);
+      setSending(false);
+      setProgressStep(null);
       setDecidingReject(false);
     }
   };
@@ -786,6 +928,35 @@ function NegotiationPage() {
     setAttachedEvidence((prev) => prev.filter((item) => item.uri !== uri));
   };
 
+  const onFolderFabPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    folderFabDragRef.current = {
+      dx: e.clientX - (folderFabPos?.x ?? 0),
+      dy: e.clientY - (folderFabPos?.y ?? 0),
+      moved: false,
+      active: true,
+    };
+  };
+
+  const onFolderFabPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!folderFabDragRef.current.active || !folderFabPos) return;
+    const nx = e.clientX - folderFabDragRef.current.dx;
+    const ny = e.clientY - folderFabDragRef.current.dy;
+    if (Math.abs(nx - folderFabPos.x) > 5 || Math.abs(ny - folderFabPos.y) > 5)
+      folderFabDragRef.current.moved = true;
+    setFolderFabPos({
+      x: Math.max(28, Math.min(window.innerWidth - 28, nx)),
+      y: Math.max(28, Math.min(window.innerHeight - 28, ny)),
+    });
+  };
+
+  const onFolderFabPointerUp = () => {
+    const moved = folderFabDragRef.current.moved;
+    folderFabDragRef.current.active = false;
+    folderFabDragRef.current.moved = false;
+    if (!moved) setShowEvidenceDrawer(true);
+  };
+
   /* ── Invite link ── */
   const handleCopyInvite = async () => {
     const link = `${window.location.origin}/case/${caseId}/respond`;
@@ -797,9 +968,16 @@ function NegotiationPage() {
   const isActive = gameState === "active";
   const isSettled = gameState === "settled";
   const isDeadlock = gameState === "deadlock";
-  const mediatorGatePassed = currentRound < 3 || mediatorShown;
+  const pvpMediatorPhase = isPvp && (caseData?.mediatorPhase === true);
+  const isChipGenerating = isPvp
+    && (
+      pvpMediatorPhase
+      || (caseData?.currentTurn === userRole && caseData?.turnStatus === "processing")
+    );
+  const mediatorGatePassed = currentRound < 3 || mediatorShown || pvpMediatorPhase;
   const commanderInputEnabled = isActive && mediatorGatePassed && (!isPvp || (isMyTurn && defendantJoined));
-  const currentRoundDisplay = isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound;
+  const currentRoundDisplay = Math.min(isPvp ? (caseData?.pvpRound ?? currentRound) : currentRound, 4);
+  const isPendingAcceptWaiting = isPvp && gameState === "pending_accept" && pendingDecisionRole !== userRole;
 
   /* ── Mediator auto-trigger (AI mode only) ── */
   useEffect(() => {
@@ -807,11 +985,11 @@ function NegotiationPage() {
     if (!isActive || sending || showDecision || mediatorShown) return;
     if (currentRound !== 2 || mediatorAutoTriggered) return;
 
-    setMediatorAutoTriggered(true);
-    setMediatorGenerating(true);
+    setMediatorAutoTriggered(true);  // Prevent re-entry immediately
     setSelectedChip(null);
     setChips(null);
-    handleSend("");
+    setMediatorGenerating(true);  // Show "Mediator Intervention" badge immediately
+    handleSend("");  // Start backend immediately (no delay)
   }, [
     isActive,
     sending,
@@ -825,6 +1003,20 @@ function NegotiationPage() {
   useEffect(() => {
     if (mediatorShown) setMediatorAutoTriggered(true);
   }, [mediatorShown]);
+
+  /* ── Retry mediator trigger if send finished but mediator never appeared ── */
+  useEffect(() => {
+    if (isPvp || sending || !mediatorAutoTriggered || mediatorShown || currentRound !== 2) return;
+    // If backend already returned a round > 2, the mediator turn succeeded — don't re-arm
+    if (pendingRoundRef.current !== null && pendingRoundRef.current > 2) return;
+    if (displayRound > 2) return;
+    // Auto-trigger ran but mediator message not in Firestore — allow up to 2 retries
+    if (mediatorRetryRef.current < 2) {
+      mediatorRetryRef.current += 1;
+      setMediatorGenerating(false);
+      setMediatorAutoTriggered(false);
+    }
+  }, [sending, mediatorAutoTriggered, mediatorShown, isPvp, currentRound, displayRound]);
 
   /* ── Loading state ── */
   if (caseLoading || messagesLoading) {
@@ -879,7 +1071,7 @@ function NegotiationPage() {
           {/* Header */}
           <header className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 bg-white">
             <button
-              onClick={() => router.push("/dashboard")}
+              onClick={() => setShowLeaveConfirm(true)}
               className="w-9 h-9 rounded-lg bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors"
             >
               <span className="material-icons text-lg text-gray-600">arrow_back</span>
@@ -1013,7 +1205,7 @@ function NegotiationPage() {
         <div className="sticky top-0 z-20">
         <header className="px-5 py-4 border-b border-gray-100 flex items-center gap-3 bg-white">
           <button
-            onClick={() => router.push("/dashboard")}
+            onClick={() => setShowLeaveConfirm(true)}
             className="w-9 h-9 rounded-lg bg-gray-50 flex items-center justify-center hover:bg-gray-100 transition-colors"
           >
             <span className="material-icons text-lg text-gray-600">arrow_back</span>
@@ -1024,13 +1216,13 @@ function NegotiationPage() {
             </h1>
             <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider">
               <span className="text-sm text-gray-700">
-                {mediatorGenerating
+                {pvpMediatorPhase || mediatorGenerating
                   ? "Mediator Intervention"
-                  : `Round ${currentRoundDisplay}`}
+                  : `Round ${isPvp ? currentRoundDisplay : displayRound}`}
               </span>{" "}
               &middot; {" "}
               {isSettled ? "Settled" : isDeadlock ? "Deadlock" : isPvp ? `${userRole === "plaintiff" ? "Plaintiff" : "Defendant"}` : "Active"}
-              {isPvp && isActive && (
+              {isPvp && isActive && !sending && (
                 <span className={isMyTurn ? "text-green-600" : "text-amber-500"}>
                   {" "}&middot; {isMyTurn ? "Your Turn" : "Opponent's Turn"}
                 </span>
@@ -1064,14 +1256,32 @@ function NegotiationPage() {
 
         <div className="px-5 pt-3 pb-4 bg-white border-b border-gray-100">
           <div
-            className="mx-auto w-full max-w-[280px] rounded-2xl bg-gradient-to-b from-yellow-300 to-amber-500 border border-yellow-400/60 px-4 py-2.5 text-center"
-            style={{ boxShadow: "0 6px 16px rgba(180,120,0,0.35), inset 0 1px 0 rgba(255,255,220,0.6)" }}
+            className="mx-auto w-full max-w-[280px] rounded-2xl px-4 py-2.5 text-center"
+            style={{
+              background:
+                "linear-gradient(to bottom, #1e3a5f, #1a2a3a) padding-box, " +
+                "linear-gradient(135deg, #c8a840 0%, #e8c860 25%, #f5df90 50%, #e8c860 75%, #c8a840 100%) border-box",
+              border: "6px solid transparent",
+              boxShadow:
+                "0 2px 14px rgba(200,180,104,0.28), 0 0 28px rgba(255,253,232,0.09)",
+            }}
           >
-            <p className="text-[10px] font-bold text-amber-800 uppercase tracking-[0.18em]">Current Round</p>
-            <p className="text-xl font-extrabold text-amber-950 drop-shadow-sm leading-tight mt-0.5">
-              {mediatorGenerating
+            <p
+              className="text-[10px] font-bold uppercase tracking-[0.18em]"
+              style={{ color: "#d4bf7a" }}
+            >
+              Current Round
+            </p>
+            <p
+              className="text-xl font-extrabold leading-tight mt-0.5"
+              style={{
+                color: "#dcc078",
+                textShadow: "0 0 10px rgba(200,170,60,0.45), 0 1px 2px rgba(0,0,0,0.4)",
+              }}
+            >
+              {pvpMediatorPhase || mediatorGenerating
                 ? "Mediator Intervention"
-                : `Round ${currentRoundDisplay}`}
+                : `Round ${isPvp ? currentRoundDisplay : displayRound}`}
             </p>
           </div>
         </div>
@@ -1079,15 +1289,26 @@ function NegotiationPage() {
         {/* ── Settlement Meter (sticky with header) ── */}
         <div className="px-5 py-3 bg-gray-50 border-b border-gray-100">
           <div className="rounded-xl border border-gray-200 bg-white px-3 py-2.5 shadow-sm">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-              Settlement Progress
-            </span>
-            {counterOffer != null && (
-              <span className="text-[10px] font-bold text-[#1a2a3a] bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
-                Counter: RM {counterOffer.toLocaleString()}
+          <div className="grid grid-cols-3 items-center mb-1.5">
+            <div className="flex justify-start">
+              {defendantOffer != null && (
+                <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2 py-0.5">
+                  Defendant: RM {defendantOffer.toLocaleString()}
+                </span>
+              )}
+            </div>
+            <div className="flex justify-center">
+              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                Settlement Progress
               </span>
-            )}
+            </div>
+            <div className="flex justify-end">
+              {plaintiffOffer != null && (
+                <span className="text-[10px] font-bold text-fuchsia-700 bg-fuchsia-50 border border-fuchsia-100 rounded-full px-2 py-0.5">
+                  Plaintiff: RM {plaintiffOffer.toLocaleString()}
+                </span>
+              )}
+            </div>
           </div>
           <SettlementMeter
             claimAmount={caseData?.amount || 0}
@@ -1095,6 +1316,21 @@ function NegotiationPage() {
             plaintiffOffer={plaintiffOffer}
             defendantOffer={defendantOffer}
           />
+          {/* Private price anchor — visible only to self, hidden from opponent */}
+          <div className="flex justify-between mt-1">
+            {userRole === "defendant" && caseData?.defendantCeilingPrice != null && caseData.defendantCeilingPrice > 0 ? (
+              <span className="text-[9px] text-blue-400 font-semibold flex items-center gap-0.5">
+                <span className="material-icons" style={{ fontSize: 9 }}>lock</span>
+                Your ceiling: RM {caseData.defendantCeilingPrice.toLocaleString()}
+              </span>
+            ) : <span />}
+            {userRole === "plaintiff" && caseData?.floorPrice != null && caseData.floorPrice > 0 ? (
+              <span className="text-[9px] text-fuchsia-400 font-semibold flex items-center gap-0.5">
+                Your floor: RM {caseData.floorPrice.toLocaleString()}
+                <span className="material-icons" style={{ fontSize: 9 }}>lock</span>
+              </span>
+            ) : <span />}
+          </div>
           </div>
         </div>
         </div>
@@ -1377,6 +1613,8 @@ function NegotiationPage() {
               <div className={`border rounded-2xl px-6 py-4 max-w-[80%] shadow-sm ${
                 progressStep?.startsWith("\u274c") || progressStep?.startsWith("\u26a0")
                   ? "bg-gradient-to-r from-red-50 to-yellow-50 border-red-200"
+                  : (mediatorGenerating && !mediatorShown)
+                  ? "bg-gradient-to-r from-amber-50 to-yellow-50 border-amber-200"
                   : "bg-gradient-to-r from-gray-50 to-indigo-50 border-gray-200"
               }`}>
                 <div className="flex items-center gap-3 mb-2">
@@ -1386,30 +1624,54 @@ function NegotiationPage() {
                     <span className="material-icons text-yellow-500" style={{ fontSize: 20 }}>warning</span>
                   ) : (
                     <div className="relative w-5 h-5">
-                      <div className="absolute inset-0 border-2 border-indigo-200 rounded-full" />
-                      <div className="absolute inset-0 border-2 border-indigo-500 rounded-full border-t-transparent animate-spin" />
+                      <div className={`absolute inset-0 border-2 ${(mediatorGenerating && !mediatorShown) ? 'border-amber-200' : 'border-indigo-200'} rounded-full`} />
+                      <div className={`absolute inset-0 border-2 ${(mediatorGenerating && !mediatorShown) ? 'border-amber-500' : 'border-indigo-500'} rounded-full border-t-transparent animate-spin`} />
                     </div>
                   )}
                   <p className={`text-xs font-bold uppercase tracking-wider ${
                     progressStep?.startsWith("\u274c") ? "text-red-600"
                     : progressStep?.startsWith("\u26a0") ? "text-yellow-600"
+                    : (mediatorGenerating && !mediatorShown) ? "text-amber-700"
                     : "text-indigo-600"
                   }`}>
-                    {progressStep?.startsWith("\u274c") ? "Error" : progressStep?.startsWith("\u26a0") ? "Warning" : "Agents Deliberating"}
+                    {progressStep?.startsWith("\u274c") ? "Error" : progressStep?.startsWith("\u26a0") ? "Warning" : (mediatorGenerating && !mediatorShown) ? "⚖️ Mediator Reviewing Case" : "Agents Deliberating"}
                   </p>
                   <span className="text-[10px] text-gray-400 tabular-nums ml-auto">
                     {Math.floor(elapsedSecs / 60)}:{String(elapsedSecs % 60).padStart(2, "0")}
                   </span>
                 </div>
-                {progressStep && (
+                {(progressStep || (mediatorGenerating && !mediatorShown)) && (
                   <p className={`text-sm font-medium pl-8 ${
                     progressStep?.startsWith("\u274c") ? "text-red-600"
                     : progressStep?.startsWith("\u26a0") ? "text-yellow-600"
+                    : (mediatorGenerating && !mediatorShown) ? "text-amber-600 animate-pulse"
                     : "text-gray-600 animate-pulse"
                   }`}>
-                    {progressStep}
+                    {(mediatorGenerating && !mediatorShown) && !progressStep?.startsWith("\u274c") && !progressStep?.startsWith("\u26a0")
+                      ? "The mediator is analyzing both positions..."
+                      : progressStep}
                   </p>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* PvP: Chip generation / mediator spinner (shown on the next player's screen while backend prepares chips or mediator reviews) */}
+          {isChipGenerating && !sending && (
+            <div className="flex justify-center">
+              <div className={`border rounded-2xl px-6 py-4 max-w-[80%] shadow-sm ${pvpMediatorPhase ? 'bg-gradient-to-r from-amber-50 to-yellow-50 border-amber-200' : 'bg-gradient-to-r from-gray-50 to-indigo-50 border-gray-200'}`}>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="relative w-5 h-5">
+                    <div className={`absolute inset-0 border-2 ${pvpMediatorPhase ? 'border-amber-200' : 'border-indigo-200'} rounded-full`} />
+                    <div className={`absolute inset-0 border-2 ${pvpMediatorPhase ? 'border-amber-500' : 'border-indigo-500'} rounded-full border-t-transparent animate-spin`} />
+                  </div>
+                  <p className={`text-xs font-bold uppercase tracking-wider ${pvpMediatorPhase ? 'text-amber-700' : 'text-indigo-600'}`}>
+                    {pvpMediatorPhase ? '⚖️ Mediator Reviewing Case' : 'Agents Deliberating'}
+                  </p>
+                </div>
+                <p className={`text-sm font-medium pl-8 ${pvpMediatorPhase ? 'text-amber-600' : 'text-gray-600'} animate-pulse`}>
+                  {pvpMediatorPhase ? 'The mediator is analyzing both positions...' : 'Preparing your strategic options...'}
+                </p>
               </div>
             </div>
           )}
@@ -1434,13 +1696,22 @@ function NegotiationPage() {
           </div>
         )}
 
-        {/* ── Pending Decision (Accept/Reject) ── */}
+        {/* ── Pending Decision (Accept/Reject or Accept/Continue) ── */}
         {showDecision && (
           <div className="px-5 py-4 bg-blue-50 border-t border-blue-200">
-            <p className="text-xs font-bold text-blue-900 mb-1">Final Offer on the Table</p>
-            {counterOffer != null && (
+            <p className="text-xs font-bold text-blue-900 mb-1">
+              {gameState === "pending_accept" ? "Offer Within Your Range" : "Final Offer on the Table"}
+            </p>
+            {gameState === "pending_accept" && (
+              <p className="text-sm text-blue-800 mb-2">
+                {pendingDecisionRole === "plaintiff"
+                  ? `The opponent's offer of RM ${(defendantOffer ?? counterOffer ?? 0).toLocaleString()} meets or exceeds your floor price. Do you accept?`
+                  : `The opponent's offer of RM ${(plaintiffOffer ?? counterOffer ?? 0).toLocaleString()} is within your maximum amount. Do you accept?`}
+              </p>
+            )}
+            {(userRole === "plaintiff" ? defendantOffer : plaintiffOffer) != null && gameState !== "pending_accept" && (
               <p className="text-lg font-bold text-blue-800 mb-3">
-                RM {counterOffer.toLocaleString()}
+                RM {(userRole === "plaintiff" ? (defendantOffer ?? 0) : (plaintiffOffer ?? 0)).toLocaleString()}
               </p>
             )}
             <div className="flex gap-3">
@@ -1449,14 +1720,18 @@ function NegotiationPage() {
                 disabled={decidingAccept}
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-50"
               >
-                {decidingAccept ? "Accepting..." : "Accept Offer"}
+                {decidingAccept ? "Accepting..." : "Accept"}
               </button>
               <button
-                onClick={handleRejectOffer}
+                onClick={gameState === "pending_accept" ? handleContinueNegotiation : handleRejectOffer}
                 disabled={decidingReject}
                 className="flex-1 bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-lg transition-colors disabled:opacity-50"
               >
-                {decidingReject ? "Rejecting..." : "Reject & Go to Court"}
+                {decidingReject
+                  ? "..."
+                  : gameState === "pending_accept"
+                  ? "Continue Negotiation"
+                  : "Reject & Go to Court"}
               </button>
             </div>
           </div>
@@ -1630,7 +1905,7 @@ function NegotiationPage() {
                   }}
                   placeholder="Add legal instructions, amount, or tone (optional)..."
                   disabled={sending}
-                  className="flex-1 bg-white border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
+                  className="flex-1 min-w-0 bg-white border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
                 />
                 <button
                   onClick={() => {
@@ -1646,9 +1921,6 @@ function NegotiationPage() {
                   </span>
                 </button>
               </div>
-              <p className="text-[10px] text-gray-400 mt-2 text-center">
-                1) Choose strategy  2) Add details  3) Review evidence tabs  4) Send
-              </p>
             </div>
           </div>
         )}
@@ -1700,7 +1972,7 @@ function NegotiationPage() {
                 }}
                 placeholder="Guide your agent (optional)..."
                 disabled={sending}
-                className="flex-1 bg-gray-50 border border-gray-200 rounded-full px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
+                className="flex-1 min-w-0 bg-gray-50 border border-gray-200 rounded-full px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2a3a]/20 focus:border-[#1a2a3a] placeholder:text-gray-400 disabled:opacity-50"
               />
               <button
                 onClick={() => handleSend(input)}
@@ -1725,7 +1997,7 @@ function NegotiationPage() {
         )}
 
         {/* ── PvP: Waiting for opponent's move ── */}
-        {isPvp && isActive && !isMyTurn && !sending && defendantJoined && (
+        {isPvp && !sending && defendantJoined && ((isActive && !isMyTurn) || isPendingAcceptWaiting) && (
           <div className="px-5 py-4 bg-amber-50 border-t border-amber-200 text-center">
             <div className="flex items-center justify-center gap-2 mb-1">
               <div className="relative w-4 h-4">
@@ -1742,14 +2014,23 @@ function NegotiationPage() {
           </div>
         )}
 
-        {/* ── PvP: Turn is being processed ── */}
-        {isPvp && caseData?.turnStatus === "processing" && !sending && (
-          <div className="px-5 py-3 bg-indigo-50 border-t border-indigo-100 text-center">
-            <p className="text-xs text-indigo-500 animate-pulse">
-              AI agents are deliberating...
+        {isPvp && gameState === "pending_decision" && userRole === "defendant" && !sending && (
+          <div className="px-5 py-4 bg-amber-50 border-t border-amber-200 text-center">
+            <div className="flex items-center justify-center gap-2 mb-1">
+              <div className="relative w-4 h-4">
+                <div className="absolute inset-0 border-2 border-amber-300 rounded-full" />
+                <div className="absolute inset-0 border-2 border-amber-500 rounded-full border-t-transparent animate-spin" />
+              </div>
+              <p className="text-xs font-bold text-amber-700 uppercase tracking-wider">
+                Waiting for opponent&apos;s final decision...
+              </p>
+            </div>
+            <p className="text-[10px] text-amber-500">
+              You&apos;ll see the outcome once the plaintiff decides
             </p>
           </div>
         )}
+
 
         {/* ── Evidence Modal ── */}
         <EvidenceModal
@@ -1771,14 +2052,23 @@ function NegotiationPage() {
           />
         )}
 
-        {/* ── Mobile Evidence Floating Button ── */}
-        <button
-          onClick={() => setShowEvidenceDrawer(true)}
-          className="md:hidden fixed bottom-20 right-4 w-12 h-12 bg-[#1a2a3a] text-white rounded-full shadow-lg flex items-center justify-center hover:bg-[#243447] transition-colors z-30"
-          title="View Evidence"
-        >
-          <span className="material-icons text-xl">folder_open</span>
-        </button>
+        {/* ── Mobile Evidence Floating Button (draggable) ── */}
+        {folderFabPos && (
+          <div
+            style={{ position: "fixed", left: folderFabPos.x - 24, top: folderFabPos.y - 24, zIndex: 30 }}
+            onPointerDown={onFolderFabPointerDown}
+            onPointerMove={onFolderFabPointerMove}
+            onPointerUp={onFolderFabPointerUp}
+            className="md:hidden touch-none select-none"
+          >
+            <button
+              title="View Evidence (drag to reposition)"
+              className="w-12 h-12 bg-[#1a2a3a] text-white rounded-full shadow-md flex items-center justify-center"
+            >
+              <span className="material-icons text-xl">folder_open</span>
+            </button>
+          </div>
+        )}
 
         {/* ── Mobile Evidence Drawer ── */}
         <EvidenceSidebar
@@ -1817,6 +2107,32 @@ function NegotiationPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Leave Confirmation Modal ── */}
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full mx-4">
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">Leave Negotiation?</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              Your session will remain open and can be rejoined later. Are you sure you want to leave?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowLeaveConfirm(false)}
+                className="flex-1 py-2 rounded-lg border border-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Stay
+              </button>
+              <button
+                onClick={() => router.push("/case/new")}
+                className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-medium hover:bg-red-600 transition-colors"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

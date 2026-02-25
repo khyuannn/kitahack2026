@@ -65,7 +65,7 @@ NOTE: The latest counter-offer was RM {counter_offer}."""
 - Option 3 (Walk Away): Reject and prepare for court/formal dispute resolution."""
     
     return f"""
-You are the Lex-Machina Strategy Engine. 
+You are the LexSuluh Strategy Engine.
 {role_perspective}
 Review the conversation history and the legal context for this Malaysian dispute.
 

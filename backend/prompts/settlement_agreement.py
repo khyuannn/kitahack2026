@@ -1,5 +1,5 @@
 SETTLEMENT_AGREEMENT_PROMPT = """
-You are Lex-Machina's Legal Document Generator.
+You are LexSuluh's Legal Document Generator.
 
 The negotiation has CONCLUDED with a settlement agreement.
 Generate a formal settlement agreement in HTML format suitable for PDF printing.
@@ -58,7 +58,7 @@ Start with <!DOCTYPE html> or <html> and end with </html>.
 """
 
 DEADLOCK_COURT_FILING_HTML_PROMPT = """
-You are Lex-Machina's Legal Document Generator.
+You are LexSuluh's Legal Document Generator.
 
 The negotiation has ended in DEADLOCK. Generate a Form 206-style court filing document in formal malay language in HTML.
 

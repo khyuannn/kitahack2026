@@ -58,7 +58,8 @@ from backend.app.api_models import (
     DefendantRespondRequest,
 )
 
-load_dotenv()
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+load_dotenv(dotenv_path=os.path.join(ROOT_DIR, ".env"))
 
 db = None
 # -----------------------------------------------------------------------------
@@ -81,7 +82,9 @@ def _init_firebase() -> None:
         try:
             sa_dict = json.loads(sa_json)
             cred = credentials.Certificate(sa_dict)
-            firebase_admin.initialize_app(cred)
+            storage_bucket = os.getenv("FIREBASE_STORAGE_BUCKET", "")
+            options = {"storageBucket": storage_bucket} if storage_bucket else {}
+            firebase_admin.initialize_app(cred, options)
             print("Firebase initialized from FIREBASE_SERVICE_ACCOUNT_JSON env var")
             return
         except Exception as e:
@@ -97,7 +100,9 @@ def _init_firebase() -> None:
 
     if service_account_path and os.path.isfile(service_account_path):
         cred = credentials.Certificate(service_account_path)
-        firebase_admin.initialize_app(cred)
+        storage_bucket = os.getenv("FIREBASE_STORAGE_BUCKET", "")
+        options = {"storageBucket": storage_bucket} if storage_bucket else {}
+        firebase_admin.initialize_app(cred, options)
         print(f"Firebase initialized with service account: {service_account_path}")
     else:
         print(f"Firebase credentials not found at {service_account_path}. Running in mock mode.")
@@ -149,7 +154,7 @@ print(f"debug: file exists? {os.path.isfile(path) if path else 'N/A'}")
 # App setup
 # -----------------------------------------------------------------------------
 app = FastAPI(
-    title="Lex Machina API",
+    title="LexSuluh API",
     description="AI-powered dispute mediation system",
     version="0.1.0",
 )
@@ -394,7 +399,7 @@ async def next_turn(caseId: str, request: TurnRequest):
     thread = threading.Thread(target=run_in_thread, daemon=True)
     thread.start()
     request_started_at = time.monotonic()
-    hard_timeout_sec = 210
+    hard_timeout_sec = 260
     heartbeat_interval_sec = 8
     
     def event_generator():
@@ -443,12 +448,14 @@ async def next_turn(caseId: str, request: TurnRequest):
                 "agent_message": r.get("agent_message", ""),
                 "plaintiff_message": r.get("plaintiff_message"),
                 "current_round": r.get("current_round", 1),
+                "display_round": r.get("display_round", r.get("current_round", 1)),
                 "audio_url": r.get("audio_url"),
                 "auditor_passed": r.get("auditor_passed", True),
                 "auditor_warning": r.get("auditor_warning"),
                 "chips": chips_data,
                 "game_state": r.get("game_state", "active"),
                 "counter_offer_rm": r.get("counter_offer_rm"),
+                "pending_decision_role": r.get("pending_decision_role"),
             }}) + "\n"
         else:
             yield json.dumps({"type": "error", "message": "No result returned"}) + "\n"
@@ -726,7 +733,7 @@ async def pvp_turn(caseId: str, request: PvpTurnRequest):
     thread = threading.Thread(target=run_in_thread, daemon=True)
     thread.start()
     request_started_at = time.monotonic()
-    hard_timeout_sec = 210
+    hard_timeout_sec = 260
     heartbeat_interval_sec = 8
 
     def event_generator():
@@ -780,6 +787,7 @@ async def pvp_turn(caseId: str, request: PvpTurnRequest):
                 "game_state": r.get("game_state", "active"),
                 "counter_offer_rm": r.get("counter_offer_rm"),
                 "current_turn": r.get("current_turn", "plaintiff"),
+                "pending_decision_role": r.get("pending_decision_role"),
             }}) + "\n"
         else:
             yield json.dumps({"type": "error", "message": "No result returned"}) + "\n"
@@ -1374,6 +1382,102 @@ async def accept_final_offer(caseId: str):
             raise HTTPException(status_code=500, detail=str(e))
     
     raise HTTPException(status_code=500, detail="Firebase not available")
+
+
+@app.post("/api/cases/{caseId}/continue-negotiation")
+async def continue_negotiation(caseId: str):
+    """User declines the favorable offer — game resumes as active.
+    Returns immediately with default chips, then generates real chips
+    in a background thread and writes them to Firestore nextChips."""
+    from backend.core.orchestrator import generate_strategy_chips, inject_mediator_guidance
+
+    if not db:
+        raise HTTPException(status_code=500, detail="Firebase not available")
+
+    case_ref = db.collection("cases").document(caseId)
+    case_doc = case_ref.get()
+    if not case_doc.exists:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    case_data = case_doc.to_dict()
+    pending_role = case_data.get("pendingDecisionRole")
+    is_pvp = case_data.get("mode") == "pvp"
+
+    # Determine which role needs chips (the role that was pending the decision)
+    chips_role = pending_role or "plaintiff"
+    current_round = case_data.get("pvpRound", 1) if is_pvp else (case_data.get("displayRound", 1))
+
+    # Clear stale chips immediately — frontend will spin until background thread writes real ones
+    update = {
+        "game_state": "active",
+        "pendingDecisionRole": None,
+        "status": "active",
+        "nextChips": None,
+    }
+    if is_pvp and pending_role:
+        update["currentTurn"] = pending_role
+        update["turnStatus"] = "waiting"
+
+    case_ref.update(update)
+
+    # Background thread: (optionally) run deferred mediator, then generate real chips
+    needs_mediator = case_data.get("mediatorPhase", False)
+
+    def _bg_generate_chips():
+        try:
+            messages_ref = case_ref.collection("messages")
+
+            def _load_history():
+                h = []
+                for msg_doc in messages_ref.order_by("createdAt").stream():
+                    md = msg_doc.to_dict()
+                    h.append({
+                        "role": md.get("role"),
+                        "content": md.get("content"),
+                        "round": md.get("round"),
+                    })
+                return h
+
+            history = _load_history()
+
+            # Run deferred mediator if it was skipped because the game was paused
+            if needs_mediator:
+                print(f"⏩ [Continue] Running deferred mediator for case {caseId}")
+                inject_mediator_guidance(caseId, case_data, history)
+                case_ref.update({"mediatorPhase": False})
+                # Reload history so chips are generated with the mediator message included
+                history = _load_history()
+
+            last_counter_offer = None
+            try:
+                for msg_doc in messages_ref.order_by("createdAt", direction=firestore.Query.DESCENDING).limit(5).stream():
+                    md = msg_doc.to_dict()
+                    if md.get("counter_offer_rm") is not None:
+                        last_counter_offer = md["counter_offer_rm"]
+                        break
+            except Exception:
+                pass
+
+            chips = generate_strategy_chips(
+                case_title=case_data.get("title", "Dispute"),
+                current_round=current_round,
+                counter_offer=last_counter_offer,
+                history=history,
+                progress_callback=None,
+                role=chips_role,
+            )
+            if chips and chips.get("question") and chips.get("options"):
+                case_ref.update({"nextChips": chips})
+                print(f"✅ [Continue] Real chips generated and written to Firestore")
+            else:
+                print(f"⚠️ [Continue] Chip generation returned empty, keeping defaults")
+        except Exception as e:
+            print(f"⚠️ [Continue] Background work failed: {e}")
+
+    bg = threading.Thread(target=_bg_generate_chips, daemon=True)
+    bg.start()
+
+    return {"status": "active", "message": "Negotiation continues."}
 
 
 @app.post("/api/cases/{caseId}/generate-settlement-pdf")

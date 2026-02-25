@@ -280,7 +280,7 @@ export default function DefendantRespondPage() {
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="font-display text-xl font-bold text-black tracking-wide">
-              Lex-Machina
+              LexSuluh
             </h1>
             <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">
               Defendant Response
@@ -570,7 +570,7 @@ export default function DefendantRespondPage() {
         <footer className="py-6 border-t border-gray-100 mt-auto bg-white">
           <div className="text-center">
             <p className="text-[10px] text-gray-400">
-              &copy; 2026 Lex-Machina &middot; AI-Powered Dispute Resolution
+              &copy; 2026 LexSuluh &middot; AI-Powered Dispute Resolution
             </p>
           </div>
         </footer>

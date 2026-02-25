@@ -12,6 +12,7 @@ from firebase_admin import firestore, storage
 from google import genai
 from google.genai import types
 import json
+import re
 from backend.logic.neurosymbolic import evaluate_game_state
 
 # =====================================================================
@@ -26,6 +27,7 @@ from backend.logic.evidence import validate_evidence
 from backend.prompts.chips import generate_chips_prompt
 from backend.tts.voice import synthesize_audio_bytes
 import concurrent.futures
+import threading
 
 # Import agent graph (Phase 1.5)
 try:
@@ -43,7 +45,7 @@ FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
 # Phase 2 Constants
 MAX_ROUNDS = 4
 MAX_AUDITOR_RETRIES = 2
-TURN_TOTAL_TIMEOUT_SEC = 180
+TURN_TOTAL_TIMEOUT_SEC = 240
 
 def get_db():
     """Get Firestore client."""
@@ -92,6 +94,43 @@ def _call_gemini_once(prompt: str, model_name: str, file_parts: Optional[List[tu
     return response.text
 
 
+def _extract_json_from_text(text: str) -> str:
+    """Extract a JSON object from raw LLM output.
+
+    Handles three cases (in priority order):
+    1. Response wrapped in ```json ... ``` fences
+    2. Response wrapped in ``` ... ``` fences
+    3. JSON object embedded anywhere in prose (LLM forgot to output ONLY JSON)
+
+    Falls back to returning the original text unchanged so the caller's
+    json.loads will still raise JSONDecodeError as before.
+    """
+    text = (text or "").strip()
+    if text.startswith("```json"):
+        return text.split("```json", 1)[1].split("```", 1)[0].strip()
+    if text.startswith("```"):
+        return text.split("```", 1)[1].split("```", 1)[0].strip()
+    # Search for the outermost {...} anywhere in the text
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return match.group(0).strip()
+    return text
+
+
+def _build_directive_section(user_message: str, role: str = "plaintiff") -> str:
+    """Build the commander directive block injected into the LLM prompt."""
+    if not user_message or not user_message.strip():
+        return ""
+    limit_phrase = "your floor price" if role == "plaintiff" else "your maximum offer"
+    return (
+        f"\n\n[COMMANDER DIRECTIVE — MUST FOLLOW]: {user_message.strip()}\n"
+        f"This is a direct order from the user commanding you. You MUST follow this directive exactly. "
+        f"If the user specifies a counter-offer amount (e.g. 'offer 1500'), you MUST use that exact amount "
+        f"as your counter_offer_rm unless it violates {limit_phrase}. "
+        f"The user's strategy overrides your own judgement."
+    )
+
+
 def call_gemini_with_retry(prompt: str, max_retries: int = 2, per_call_timeout: int = 30, progress_callback=None, file_parts: Optional[List[tuple]] = None) -> str:
     """Call Gemini API with retry + exponential backoff for rate limits.
     Each individual call is capped at per_call_timeout seconds."""
@@ -114,17 +153,22 @@ def call_gemini_with_retry(prompt: str, max_retries: int = 2, per_call_timeout: 
             finally:
                 pool.shutdown(wait=False, cancel_futures=True)
         except concurrent.futures.TimeoutError:
+            if not fallback_used and active_model != FALLBACK_MODEL:
+                fallback_used = True
+                active_model = FALLBACK_MODEL
+                _emit(f"⚠ AI call timed out. Switching to fallback model: {FALLBACK_MODEL}")
+                continue
             _emit(f"⚠ AI call timed out after {per_call_timeout}s (attempt {attempt+1}/{max_retries}), retrying...")
         except Exception as e:
             error_str = str(e)
-            if ("503" in error_str or "UNAVAILABLE" in error_str) and not fallback_used and FALLBACK_MODEL != active_model:
+            if not fallback_used and active_model != FALLBACK_MODEL:
                 fallback_used = True
                 active_model = FALLBACK_MODEL
-                print(f"⚠ Gemini primary model unavailable (503). Switching to fallback model: {FALLBACK_MODEL}")
+                _emit(f"⚠ AI error ({error_str[:80]}). Switching to fallback model: {FALLBACK_MODEL}")
                 continue
             if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                 wait_time = (2 ** attempt) * 5  # 5s, 10s
-                _emit(f"⚠ Rate limited (attempt {attempt+1}/{max_retries}). Waiting {wait_time}s...")
+                _emit(f"⚠ Rate limited on fallback (attempt {attempt+1}/{max_retries}). Waiting {wait_time}s...")
                 time.sleep(wait_time)
             else:
                 raise e
@@ -276,10 +320,15 @@ def generate_strategy_chips(
     chips = None
     try:
         emit("chips", "Generating strategic options...")
-        conversation_history_str = "\n".join([
-            f"[{msg['role'].upper()}]: {msg['content'][:100]}..."
-            for msg in history[-4:]
-        ])
+        recent = history[-4:]
+        history_lines = []
+        for i, msg in enumerate(recent):
+            role_label = msg['role'].upper()
+            if i == len(recent) - 1:
+                history_lines.append(f"[LATEST MESSAGE - {role_label}]: {msg['content']}")
+            else:
+                history_lines.append(f"[{role_label}]: {msg['content'][:500]}")
+        conversation_history_str = "\n".join(history_lines)
         case_context_dict = {
             "case_title": case_title,
             "current_round": current_round,
@@ -367,7 +416,7 @@ def inject_mediator_guidance(case_id: str, case_data_dict: dict, history: list) 
             conversation_history=conversation_summary
         )
         
-        raw_mediator = call_gemini_with_retry(mediator_prompt)
+        raw_mediator = call_gemini_with_retry(mediator_prompt, per_call_timeout=50)
         
         # Parse mediator JSON
         try:
@@ -412,6 +461,22 @@ def inject_mediator_guidance(case_id: str, case_data_dict: dict, history: list) 
         
     except Exception as e:
         print(f"⚠️  Failed to inject mediator guidance: {e}")
+        # Save a fallback so mediator_already_injected=True on next call
+        fallback_text = (
+            "⚖️ **Mediator Guidance**\n\n"
+            "Both parties have presented their positions. "
+            "The mediator encourages both sides to consider the other's perspective and move toward a reasonable settlement. "
+            "Please review the evidence and make your next strategic decision.\n\n"
+            "_Note: This is fallback guidance. The AI mediator was temporarily unavailable._"
+        )
+        case_ref.collection("messages").add({
+            "role": "mediator",
+            "content": fallback_text,
+            "round": 2.5,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "is_guidance": True,
+            "audio_url": None,
+        })
 
 def run_negotiation_turn(
     case_id: str,
@@ -500,7 +565,6 @@ def run_negotiation_turn(
         # Keep prompt size bounded to reduce model timeouts/failures
         clipped_evidence = [_clip_text(text, 700) for text in evidence_texts[:8] if text]
         evidence_context = "\n".join(clipped_evidence) if clipped_evidence else "No evidence provided."
-        case_facts = f"Case Type: {case_type}\nTitle: {case_title}\nEvidence Summary: {evidence_context}"
 
         # Cap file parts at 5 to avoid oversized requests
         evidence_file_parts = evidence_file_parts[:5] if evidence_file_parts else None
@@ -517,7 +581,7 @@ def run_negotiation_turn(
                 "round": derived_round,
                 "createdAt": firestore.SERVER_TIMESTAMP,
             })
-        
+
         # =====================================================================
         # Step 3: Inject mediator guidance at Round 3
         # =====================================================================
@@ -525,15 +589,19 @@ def run_negotiation_turn(
         claim_amount = case_data.get("amount", 0) or 0
         # Defendant max offer: ~50% of claim amount, distinct from plaintiff's floor price
         defendant_max_offer = int(claim_amount * 0.5) if claim_amount > 0 else (floor_price or 0)
-        
+
+        case_description = case_data.get("description", "")
+        defendant_description = case_data.get("defendantDescription", "")
+
         case_data_dict = {
             "case_title": case_title,
             "case_type": case_type,
-            "case_facts": case_facts,
+            "case_description": case_description,
             "evidence_summary": evidence_context,
             "floor_price": floor_price or 0,
             "dispute_amount": claim_amount,
             "defendant_max_offer": defendant_max_offer,
+            "defendant_description": defendant_description,
             "legal_context": "",  # Will be filled after RAG
         }
         
@@ -556,10 +624,13 @@ def run_negotiation_turn(
                     chips = _default_chips("plaintiff", 3)
                 emit("complete", "Mediator intervention complete.")
                 print("✅ Mediator-only intervention complete. Awaiting user strategy for Round 3.")
+                # Persist displayRound so frontend survives refresh
+                case_ref.update({"displayRound": 3})
                 return {
                     "agent_message": "Mediator guidance has been posted. Review it and choose your next strategy.",
                     "plaintiff_message": None,
                     "current_round": 3,
+                    "display_round": 3,
                     "audio_url": None,
                     "auditor_passed": True,
                     "auditor_warning": None,
@@ -573,16 +644,10 @@ def run_negotiation_turn(
         # Step 4: RAG - Search for relevant laws
         # =====================================================================
         emit("rag", "Searching legal database for relevant laws...")
-        # Build enriched RAG query: include case type and latest defendant citations
+        # Build RAG query — history is already passed to agentic LLM which extracts citations itself
         rag_parts = [case_type, case_title]
         if user_message:
             rag_parts.append(user_message)
-        # Extract legal references from last defendant message for targeted RAG
-        last_defendant = next((m for m in reversed(history) if m["role"] == "defendant"), None)
-        if last_defendant:
-            import re
-            cited_sections = re.findall(r'Section\s+\d+\s+of\s+[\w\s]+\d{4}', last_defendant["content"])
-            rag_parts.extend(cited_sections[:3])
         rag_query = " ".join(rag_parts)
         legal_docs = []
         try:
@@ -639,11 +704,8 @@ def run_negotiation_turn(
             current_round=derived_round
         )
     
-        # Include commander directive as extra guidance
-        directive_section = ""
-        if user_message and user_message.strip():
-            directive_section = f"\n\n[COMMANDER DIRECTIVE — MUST FOLLOW]: {user_message.strip()}\nThis is a direct order from the user commanding you. You MUST follow this directive exactly. If the user specifies a counter-offer amount (e.g. 'offer 1500'), you MUST use that exact amount as your counter_offer_rm unless it violates your floor price. The user's strategy overrides your own judgement."
-    
+        directive_section = _build_directive_section(user_message, role="plaintiff")
+
         full_plaintiff_prompt = f"""{plaintiff_prompt}
 
 === CONVERSATION HISTORY ===
@@ -679,12 +741,7 @@ Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
             
             # Parse plaintiff JSON
             try:
-                cleaned = raw_plaintiff.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                elif cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
-                
+                cleaned = _extract_json_from_text(raw_plaintiff)
                 plaintiff_json = json.loads(cleaned)
                 plaintiff_text = plaintiff_json.get("message", cleaned)
                 plaintiff_offer = plaintiff_json.get("counter_offer_rm")
@@ -702,46 +759,28 @@ Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
             plaintiff_text = "I need a moment to review the case details. I maintain my current position for now."
             plaintiff_offer = None
                 
-        # Save plaintiff message to Firestore immediately
-        plaintiff_audio_url = generate_and_upload_role_audio(
-            case_id=case_id,
-            round_num=derived_round,
-            role="plaintiff",
-            text=plaintiff_text,
-        )
-
+        # Save plaintiff immediately — TTS and audit run in parallel with defendant generation
         print(f"💾 Saving plaintiff message...")
         plaintiff_msg_ref = messages_ref.add({
             "role": "plaintiff",
             "content": plaintiff_text,
             "round": derived_round,
             "counter_offer_rm": plaintiff_offer,
-            "audio_url": plaintiff_audio_url,
-            "auditor_passed": None, # Pending audit
+            "audio_url": None,  # Updated async below
+            "auditor_passed": None,
             "auditor_warning": None,
             "createdAt": firestore.SERVER_TIMESTAMP,
-        })[1] # add() returns (update_time, document_ref)
-        
-        # Auditor validation for Plaintiff
-        emit("auditor", "Validating plaintiff legal citations...")
-        print(f"🛡️  [Plaintiff Auditor] Validating...")
-        plaintiff_audit_result = validate_turn(plaintiff_text)
-        plaintiff_auditor_passed = plaintiff_audit_result["is_valid"]
-        
-        if not plaintiff_auditor_passed:
-            plaintiff_auditor_warning = plaintiff_audit_result.get("auditor_warning", "Citation validation failed")
-            print(f"❌ [Plaintiff Auditor] Failed: {plaintiff_auditor_warning}")
-            emit("auditor_warn", f"⚠ Plaintiff Audit failed: {plaintiff_auditor_warning[:80]}")
-        else:
-            print(f"✅ [Plaintiff Auditor] Validation passed")
-            
-        # Update Firestore with audit results
-        plaintiff_msg_ref.update({
-            "auditor_passed": plaintiff_auditor_passed,
-            "auditor_warning": plaintiff_auditor_warning if not plaintiff_auditor_passed else None,
-        })
-        
-        # Add to history for defendant context
+        })[1]
+
+        # Launch plaintiff TTS and auditor in background — parallel with defendant LLM
+        p_tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        p_tts_future = p_tts_pool.submit(
+            generate_and_upload_role_audio, case_id, derived_round, "plaintiff", plaintiff_text
+        )
+        p_audit_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        p_audit_future = p_audit_pool.submit(validate_turn, plaintiff_text)
+
+        # Add to history immediately so defendant prompt includes plaintiff's message
         history.append({
             "role": "plaintiff",
             "content": plaintiff_text,
@@ -804,17 +843,12 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             
             # Parse JSON
             try:
-                cleaned = raw_response.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                elif cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
-                
+                cleaned = _extract_json_from_text(raw_response)
                 response_json = json.loads(cleaned)
                 agent_text = response_json.get("message", cleaned)
-                game_eval = evaluate_game_state(response_json, floor_price or 0)
+                game_eval = evaluate_game_state(response_json, floor_price or 0, current_round=derived_round, max_rounds=MAX_ROUNDS)
                 counter_offer = game_eval["offer_amount"]
-                
+
                 print(f"✅ Defendant JSON parsed. Offer: {counter_offer}, meets_floor: {game_eval['meets_floor']}")
             except json.JSONDecodeError:
                 print(f"⚠️  Defendant JSON parse failed, using raw text")
@@ -831,7 +865,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             try:
                 response_json = json.loads(raw_response)
                 agent_text = response_json.get("message", raw_response)
-                game_eval = evaluate_game_state(response_json, floor_price or 0)
+                game_eval = evaluate_game_state(response_json, floor_price or 0, current_round=derived_round, max_rounds=MAX_ROUNDS)
                 counter_offer = game_eval["offer_amount"]
             except Exception:
                 agent_text = "I need a moment to review your points. I maintain my current position for now."
@@ -845,27 +879,51 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             game_eval = {"has_offer": False, "offer_amount": None, "meets_floor": False}
         
         # =====================================================================
-        # Step 7: Save defendant message & determine game state
+        # Step 7: Collect plaintiff async results, save defendant message
         # =====================================================================
-        audio_url = generate_and_upload_role_audio(
-            case_id=case_id,
-            round_num=derived_round,
-            role="defendant",
-            text=agent_text,
-        )
-        
+        # Defendant LLM took ~15-45s — plaintiff TTS and audit should be done
+        try:
+            plaintiff_audio_url = p_tts_future.result(timeout=25)
+        except Exception:
+            plaintiff_audio_url = None
+        finally:
+            p_tts_pool.shutdown(wait=False)
+
+        try:
+            plaintiff_audit_result = p_audit_future.result(timeout=10)
+            plaintiff_auditor_passed = plaintiff_audit_result["is_valid"]
+            if not plaintiff_auditor_passed:
+                plaintiff_auditor_warning = plaintiff_audit_result.get("auditor_warning", "Citation validation failed")
+                print(f"❌ [Plaintiff Auditor] Failed: {plaintiff_auditor_warning}")
+                emit("auditor_warn", f"⚠ Plaintiff Audit failed: {plaintiff_auditor_warning[:80]}")
+            else:
+                print(f"✅ [Plaintiff Auditor] Validation passed")
+                plaintiff_auditor_warning = None
+        except Exception:
+            plaintiff_auditor_passed = True
+            plaintiff_auditor_warning = None
+        finally:
+            p_audit_pool.shutdown(wait=False)
+
+        plaintiff_msg_ref.update({
+            "audio_url": plaintiff_audio_url,
+            "auditor_passed": plaintiff_auditor_passed,
+            "auditor_warning": plaintiff_auditor_warning,
+        })
+
+        # Save defendant immediately, run TTS and auditor in parallel with each other
         print(f"💾 Saving defendant message...")
         defendant_msg_ref = messages_ref.add({
             "role": "defendant",
             "content": agent_text,
             "round": derived_round,
             "counter_offer_rm": counter_offer,
-            "audio_url": audio_url,
-            "auditor_passed": None, # Pending audit
+            "audio_url": None,  # Updated async below
+            "auditor_passed": None,
             "auditor_warning": None,
             "createdAt": firestore.SERVER_TIMESTAMP,
         })[1]
-        
+
         # Add defendant response to history so chips reflect the latest exchange
         history.append({
             "role": "defendant",
@@ -873,12 +931,23 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "round": derived_round,
         })
 
-        # Auditor validation
+        # Run defendant TTS in background while auditor runs in main thread
+        d_tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        d_tts_future = d_tts_pool.submit(
+            generate_and_upload_role_audio, case_id, derived_round, "defendant", agent_text
+        )
         emit("auditor", "Validating legal citations...")
         print(f"🛡️  [Auditor] Validating...")
         audit_result = validate_turn(agent_text)
-        auditor_passed = audit_result["is_valid"]
 
+        try:
+            audio_url = d_tts_future.result(timeout=25)
+        except Exception:
+            audio_url = None
+        finally:
+            d_tts_pool.shutdown(wait=False)
+
+        auditor_passed = audit_result["is_valid"]
         if not auditor_passed:
             auditor_warning = audit_result.get("auditor_warning", "Citation validation failed")
             print(f"❌ [Auditor] Failed: {auditor_warning}")
@@ -886,8 +955,9 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         else:
             print(f"✅ [Auditor] Validation passed")
 
-        # Update Firestore with audit results
+        # Update Firestore with audit results and audio_url
         defendant_msg_ref.update({
+            "audio_url": audio_url,
             "auditor_passed": auditor_passed,
             "auditor_warning": auditor_warning if not auditor_passed else None,
         })
@@ -898,14 +968,17 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         game_state = "active"
 
         if game_eval.get("meets_floor"):
-            game_state = "settled"
-            case_ref.update({"status": "done"})
-            print(f"🎉 Settlement reached! Offer ({counter_offer}) meets floor ({floor_price})")
+            game_state = "pending_accept"
+            case_ref.update({"game_state": "pending_accept", "pendingDecisionRole": "plaintiff"})
+            print(f"⏳ Plaintiff decision required! Offer ({counter_offer}) meets floor ({floor_price})")
 
+        # After the final round, ALWAYS force the final accept/reject screen.
+        # This overrides pending_accept too — at round 4 there is no
+        # "Continue Negotiation" option, only Accept or Reject & Go to Court.
         if derived_round >= MAX_ROUNDS:
             if game_state != "settled":
                 game_state = "pending_decision"
-                print(f"⏰ Max rounds reached. Awaiting user decision...")
+                print(f"⏰ Round {derived_round} is the last round. Forcing final accept/reject decision screen.")
 
         # =====================================================================
         # Step 9: Generate chips (sequential — avoids Gemini rate limits)
@@ -928,14 +1001,25 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         # =====================================================================
         # Step 10: Return response
         # =====================================================================
+        # display_round = the round the user is ABOUT TO play next
+        display_round = min(derived_round + 1, MAX_ROUNDS) if game_state == "active" else derived_round
+        # If mediator will fire next (round 2 → 3 transition), keep display at
+        # current round so the badge stays on "Round 2" until the mediator
+        # auto-trigger shows "Mediator Intervention", then advances to 3.
+        if game_state == "active" and derived_round == 2 and not mediator_already_injected:
+            display_round = derived_round  # Stay at 2; mediator early-return advances to 3
+        # Persist so frontend survives page refresh
+        case_ref.update({"displayRound": display_round})
+
         emit("complete", "Turn complete!")
-        print(f"✅ [Round {derived_round}] Complete - Game state: {game_state}")
+        print(f"✅ [Round {derived_round}] Complete - Game state: {game_state}, displayRound: {display_round}")
         print(f"{'='*60}\n")
         
         return {
             "agent_message": agent_text,
             "plaintiff_message": plaintiff_text,
             "current_round": derived_round,
+            "display_round": display_round,
             "audio_url": audio_url,
             "auditor_passed": auditor_passed,
             "auditor_warning": auditor_warning,
@@ -943,6 +1027,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "game_state": game_state,
             "citations_found": audit_result.get("citations_found", []) if auditor_passed else [],
             "chips": chips,
+            "pending_decision_role": "plaintiff" if game_state == "pending_accept" else None,
         }
         
     except Exception as e:
@@ -957,6 +1042,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "agent_message": f"System error: {error_msg}",
             "plaintiff_message": None,
             "current_round": current_round,
+            "display_round": current_round,
             "audio_url": None,
             "auditor_passed": False,
             "auditor_warning": f"System error: {error_msg}",
@@ -1146,6 +1232,73 @@ def generate_mediator_settlement(case_id: str) -> Dict[str, Any]:
         raise e
 
 # =============================================================================
+# PvP: Background work (Phase 2) — chip generation + mediator + final update
+# =============================================================================
+def _pvp_background_work(
+    case_ref,
+    case_id: str,
+    case_data_dict: dict,
+    history: list,
+    agent_text: str,
+    user_role: str,
+    pvp_round: int,
+    next_turn: str,
+    next_round: int,
+    game_state: str,
+    is_mediator_round: bool,
+    counter_offer,
+) -> None:
+    """Phase 2: runs in background thread after SSE result is sent.
+    Injects mediator (if needed) and generates strategy chips for the next player,
+    then does the final Firestore update to turnStatus='waiting'.
+    """
+    chips = None
+    try:
+        # Only inject mediator if the game is still active — if it's pending_accept the
+        # decision panel is showing and we must not alter state until the user resumes.
+        if is_mediator_round and game_state == "active":
+            mediator_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
+            inject_mediator_guidance(case_id, case_data_dict, mediator_history)
+
+        if game_state == "active":
+            try:
+                chips = generate_strategy_chips(
+                    case_title=case_data_dict.get("case_title", "Dispute"),
+                    current_round=next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS,
+                    counter_offer=counter_offer,
+                    history=history + [{"role": user_role, "content": agent_text, "round": pvp_round}],
+                    progress_callback=None,
+                    role=next_turn,
+                )
+            except Exception as e:
+                print(f"⚠️ [PvP BG] Chip generation failed: {e}")
+            if not chips:
+                chips = _default_chips(next_turn, next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS)
+    except Exception as e:
+        print(f"⚠️ [PvP BG] Background work error: {e}")
+        if game_state == "active" and not chips:
+            try:
+                chips = _default_chips(next_turn, next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS)
+            except Exception:
+                chips = None
+    finally:
+        try:
+            final_update: Dict[str, Any] = {
+                "nextChips": chips if game_state == "active" else None,
+                "turnStatus": "waiting",
+            }
+            # Only clear mediatorPhase if mediator actually ran (game was active).
+            # If game_state == "pending_accept", leave mediatorPhase=True so that
+            # continue-negotiation can pick it up and run the mediator on resume.
+            if game_state == "active":
+                final_update["mediatorPhase"] = False
+            case_ref.update(final_update)
+            print(f"✅ [PvP BG] Final update done. turnStatus=waiting, chips={'set' if chips else 'null'}, mediatorDeferred={game_state != 'active' and is_mediator_round}")
+        except Exception as e:
+            print(f"❌ [PvP BG] Failed to write final update: {e}")
+
+
+# =============================================================================
 # PvP: Single-Side Negotiation Turn
 # =============================================================================
 def run_pvp_negotiation_turn(
@@ -1290,13 +1443,13 @@ def run_pvp_negotiation_turn(
         else:
             defendant_max_offer = int(claim_amount * 0.5) if claim_amount > 0 else (floor_price or 0)
 
-        # Include defendant's description if available
+        case_description = case_data.get("description", "")
         defendant_description = case_data.get("defendantDescription", "")
 
         case_data_dict = {
             "case_title": case_title,
             "case_type": case_type,
-            "case_facts": case_facts,
+            "case_description": case_description,
             "evidence_summary": evidence_context,
             "floor_price": floor_price or 0,
             "dispute_amount": claim_amount,
@@ -1330,9 +1483,7 @@ def run_pvp_negotiation_turn(
                 case_data=case_data_dict,
                 current_round=pvp_round
             )
-            directive_section = ""
-            if user_message and user_message.strip():
-                directive_section = f"\n\n[COMMANDER DIRECTIVE — MUST FOLLOW]: {user_message.strip()}\nThis is a direct order from the user commanding you. You MUST follow this directive exactly. If the user specifies a counter-offer amount (e.g. 'offer 1500'), you MUST use that exact amount as your counter_offer_rm unless it violates your floor price. The user's strategy overrides your own judgement."
+            directive_section = _build_directive_section(user_message, role="plaintiff")
 
             full_prompt = f"""{plaintiff_prompt}
 
@@ -1353,9 +1504,7 @@ Now argue as the Plaintiff. Remember to output ONLY valid JSON."""
                 case_data=case_data_dict,
                 current_round=pvp_round
             )
-            directive_section = ""
-            if user_message and user_message.strip():
-                directive_section = f"\n\n[COMMANDER DIRECTIVE — MUST FOLLOW]: {user_message.strip()}\nThis is a direct order from the user commanding you. You MUST follow this directive exactly. If the user specifies a counter-offer amount (e.g. 'offer 1500'), you MUST use that exact amount as your counter_offer_rm unless it violates your maximum offer. The user's strategy overrides your own judgement."
+            directive_section = _build_directive_section(user_message, role="defendant")
 
             # Get last plaintiff message for context
             last_plaintiff = next((m for m in reversed(history) if m["role"] == "plaintiff"), None)
@@ -1385,16 +1534,11 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
                 gen_executor.shutdown(wait=False, cancel_futures=True)
 
             try:
-                cleaned = raw_response.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                elif cleaned.startswith("```"):
-                    cleaned = cleaned.split("```")[1].split("```")[0].strip()
-
+                cleaned = _extract_json_from_text(raw_response)
                 response_json = json.loads(cleaned)
                 agent_text = response_json.get("message", cleaned)
                 if user_role == "defendant":
-                    game_eval = evaluate_game_state(response_json, floor_price or 0)
+                    game_eval = evaluate_game_state(response_json, floor_price or 0, current_round=pvp_round, max_rounds=MAX_ROUNDS)
                     counter_offer = game_eval["offer_amount"]
                 else:
                     counter_offer = response_json.get("counter_offer_rm")
@@ -1413,18 +1557,12 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         # Step 6: Save message & audit
         # =====================================================================
         print(f"💾 Saving {user_role} message...")
-        audio_url = generate_and_upload_role_audio(
-            case_id=case_id,
-            round_num=pvp_round,
-            role=user_role,
-            text=agent_text,
-        )
         msg_ref = messages_ref.add({
             "role": user_role,
             "content": agent_text,
             "round": pvp_round,
             "counter_offer_rm": counter_offer,
-            "audio_url": audio_url,
+            "audio_url": None,  # Updated async below
             "auditor_passed": None,
             "auditor_warning": None,
             "createdAt": firestore.SERVER_TIMESTAMP,
@@ -1444,7 +1582,11 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             next_round = pvp_round + 1
             next_turn = "plaintiff"
 
-        # Auditor validation
+        # Run TTS in background while auditor runs in main thread
+        pvp_tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        pvp_tts_future = pvp_tts_pool.submit(
+            generate_and_upload_role_audio, case_id, pvp_round, user_role, agent_text
+        )
         emit("auditor", f"Validating {user_role} legal citations...")
         audit_result = validate_turn(agent_text)
         auditor_passed = audit_result["is_valid"]
@@ -1454,71 +1596,91 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             auditor_warning = audit_result.get("auditor_warning", "Citation validation failed")
             emit("auditor_warn", f"⚠ Audit failed: {auditor_warning[:80]}")
 
+        try:
+            audio_url = pvp_tts_future.result(timeout=25)
+        except Exception:
+            audio_url = None
+        finally:
+            pvp_tts_pool.shutdown(wait=False)
+
         msg_ref.update({
+            "audio_url": audio_url,
             "auditor_passed": auditor_passed,
             "auditor_warning": auditor_warning if not auditor_passed else None,
         })
 
         # =====================================================================
-        # Step 8: Inject mediator after round 2 completes (both sides done)
+        # Step 8: Evaluate game state
         # =====================================================================
         mediator_already_injected = any(m.get("role") == "mediator" for m in history)
-        if user_role == "defendant" and pvp_round == 2 and not mediator_already_injected:
-            emit("mediator", "⚖️ Mediator is reviewing the case...")
-            mediator_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
-            inject_mediator_guidance(case_id, case_data_dict, mediator_history)
+        is_mediator_round = (user_role == "defendant" and pvp_round == 2
+                             and not mediator_already_injected)
 
-        # =====================================================================
-        # Step 9: Evaluate game state
-        # =====================================================================
         game_state = "active"
 
         if user_role == "defendant" and game_eval.get("meets_floor"):
-            game_state = "settled"
-            case_ref.update({"status": "done"})
-            print(f"🎉 PvP Settlement reached! Offer ({counter_offer}) meets floor ({floor_price})")
+            game_state = "pending_accept"
+            case_ref.update({"game_state": "pending_accept", "pendingDecisionRole": "plaintiff"})
+            print(f"⏳ PvP: Plaintiff decision required! Offer ({counter_offer}) meets floor ({floor_price})")
+
+        if user_role == "plaintiff" and counter_offer is not None and game_state == "active":
+            defendant_ceiling = int(case_data.get("defendantCeilingPrice") or 0)
+            if defendant_ceiling > 0 and counter_offer <= defendant_ceiling:
+                game_state = "pending_accept"
+                case_ref.update({"game_state": "pending_accept", "pendingDecisionRole": "defendant"})
+                print(f"⏳ PvP: Defendant decision required! Plaintiff offer ({counter_offer}) within ceiling ({defendant_ceiling})")
 
         if next_round > MAX_ROUNDS:
+            next_round = MAX_ROUNDS  # Never write round 5+ to Firestore
+            # At the final round, ALWAYS force the final accept/reject screen.
+            # This overrides pending_accept too — no "Continue Negotiation" at round 4.
             if game_state != "settled":
                 game_state = "pending_decision"
-                next_round = MAX_ROUNDS
-                print(f"⏰ Max rounds reached. Awaiting user decision...")
+                print(f"⏰ Round {pvp_round} is the last round. Forcing final accept/reject decision screen.")
 
         case_status = "active"
         if game_state == "settled":
             case_status = "done"
         elif game_state == "pending_decision":
             case_status = "pending_decision"
+        elif game_state == "pending_accept":
+            case_status = "pending_accept"
 
         # =====================================================================
-        # Step 10: Generate chips for the NEXT player (sequential)
-        # =====================================================================
-        chips = None
-        if game_state == "active":
-            updated_history = history + [{"role": user_role, "content": agent_text, "round": pvp_round}]
-            chips = generate_strategy_chips(
-                case_title=case_title,
-                current_round=next_round if next_round <= MAX_ROUNDS else MAX_ROUNDS,
-                counter_offer=counter_offer,
-                history=updated_history,
-                progress_callback=progress_callback,
-                role=next_turn,
-            )
-
-        # =====================================================================
-        # Step 11: Update case doc — flip turn
+        # Step 9: Early Firestore update — flip turn, chips=None (Phase 1 end)
+        # Background thread (Phase 2) will set nextChips + turnStatus="waiting"
         # =====================================================================
         case_ref.update({
             "currentTurn": next_turn,
-            "turnStatus": "waiting",
             "pvpRound": next_round,
+            "turnStatus": "processing",   # Phase 2 will flip to "waiting"
             "status": case_status,
             "game_state": game_state,
-            "nextChips": chips if game_state == "active" else None,
+            "mediatorPhase": is_mediator_round,
         })
 
+        # =====================================================================
+        # Step 10: Launch Phase 2 background thread (chips + mediator + final)
+        # =====================================================================
+        bg_thread = threading.Thread(
+            target=_pvp_background_work,
+            args=(
+                case_ref, case_id, case_data_dict, history, agent_text,
+                user_role, pvp_round, next_turn, next_round,
+                game_state, is_mediator_round, counter_offer,
+            ),
+            daemon=True,
+        )
+        bg_thread.start()
+
         emit("complete", "Turn complete!")
-        print(f"✅ [PvP Round {pvp_round}] {user_role} turn complete. Next: {next_turn}, Round: {next_round}")
+        print(f"✅ [PvP Round {pvp_round}] {user_role} turn complete. Next: {next_turn}, Round: {next_round}. BG thread started.")
+
+        pending_decision_role = None
+        if game_state == "pending_accept":
+            pending_decision_role = case_data_dict.get("pendingDecisionRole") or (
+                "plaintiff" if user_role == "defendant" else "defendant"
+            )
 
         return {
             "agent_message": agent_text,
@@ -1530,8 +1692,9 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             "counter_offer_rm": counter_offer,
             "game_state": game_state,
             "citations_found": audit_result.get("citations_found", []),
-            "chips": chips,
+            "chips": None,
             "current_turn": next_turn,
+            "pending_decision_role": pending_decision_role,
         }
 
     except Exception as e:
@@ -1629,13 +1792,6 @@ def run_dumb_loop(case_id: str, mode: str = "mvp") -> None:
             "floor_price": 0,
             "legal_context": legal_context_str,
         }
-        # Inject legal_context_str into the prompt format
-        # Use replace() instead of format() to avoid issues with JSON braces {} in the prompt
-        # system_instruction = build_plaintiff_prompt(
-        #     legal_context=legal_context_str,
-        #     evidence_facts=evidence_context
-        # )
-
         plaintiff_prompt = build_plaintiff_prompt(
             case_data=case_data_dict,
             current_round=1

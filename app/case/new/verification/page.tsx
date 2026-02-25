@@ -23,7 +23,8 @@ export default function VerificationPage() {
   const [verified, setVerified] = useState<boolean[]>([]);
   const [allVerified, setAllVerified] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [negotiationMode, setNegotiationMode] = useState<"ai" | "pvp">("ai");
+  const [serverWarming, setServerWarming] = useState(false);
+  const [negotiationMode, setNegotiationMode] = useState<"ai" | "pvp">("pvp");
 
   useEffect(() => {
     // Load case data from localStorage
@@ -78,37 +79,42 @@ export default function VerificationPage() {
     freelance_unpaid: "Freelance and Unpaid Services",
   };
 
-  const createCaseWithRetry = async (payload: Record<string, unknown>, attempts = 3) => {
+  const createCaseWithRetry = async (payload: Record<string, unknown>, attempts = 15) => {
     const backendBaseUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") || "";
     const startCaseUrl = backendBaseUrl ? `${backendBaseUrl}/api/cases/start` : "/api/cases/start";
     let lastError = "";
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      // Separate network errors (server unreachable) from HTTP errors (server replied with error)
+      let res: Response;
       try {
-        const res = await fetch(startCaseUrl, {
+        res = await fetch(startCaseUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-
-        if (!res.ok) {
-          const errorBody = await res.text();
-          lastError = `Failed to create case (${res.status}): ${errorBody}`;
-          if (attempt < attempts && res.status >= 500) {
-            await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
-            continue;
-          }
-          throw new Error(lastError);
-        }
-
-        return res;
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
+      } catch (networkError) {
+        // Server is unreachable — likely a cold start
+        lastError = networkError instanceof Error ? networkError.message : String(networkError);
+        if (attempt === 1) setServerWarming(true);
         if (attempt < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, 8000));
+          continue;
+        }
+        throw new Error(lastError);
+      }
+
+      // Server responded — check status
+      if (!res.ok) {
+        const errorBody = await res.text();
+        lastError = `Failed to create case (${res.status}): ${errorBody}`;
+        if (attempt < attempts && res.status >= 500) {
           await new Promise((resolve) => setTimeout(resolve, 600 * attempt));
           continue;
         }
         throw new Error(lastError);
       }
+
+      return res;
     }
     throw new Error(lastError || "Failed to create case");
   };
@@ -170,6 +176,7 @@ export default function VerificationPage() {
     } catch (error) {
       console.error("Failed to create case:", error);
       setCreating(false);
+      setServerWarming(false);
     }
   };
 
@@ -177,14 +184,25 @@ export default function VerificationPage() {
     <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-40">
       <div className="w-full">
         {/* Header */}
-        <header className="px-6 py-5 border-b border-gray-100 flex items-center gap-4 bg-white sticky top-0 z-10">
-          <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center shrink-0">
-            <span className="material-icons text-white text-xl">balance</span>
+        <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
+          <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
+            <div className="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
+              <span className="material-icons-round text-white text-2xl">balance</span>
+            </div>
+            <h1 className="font-serif font-bold text-2xl tracking-tight text-black">LexSuluh</h1>
           </div>
-          <h1 className="font-display text-2xl font-bold text-black tracking-wide">Lex-Machina</h1>
         </header>
 
         <main className="max-w-5xl mx-auto px-6 pt-8 pb-8">
+          {/* Back link */}
+          <button
+            onClick={() => router.push("/case/new/evidence")}
+            className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
+          >
+            <span className="material-icons text-sm mr-1">arrow_back</span>
+            Back to Upload
+          </button>
+
           {/* Step indicator */}
           <div className="flex items-center gap-2 mb-4">
             <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded tracking-wide">
@@ -194,15 +212,6 @@ export default function VerificationPage() {
               Of 4
             </span>
           </div>
-
-          {/* Back link */}
-          <button
-            onClick={() => router.push("/case/new/evidence")}
-            className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
-          >
-            <span className="material-icons text-sm mr-1">arrow_back</span>
-            Back to Upload
-          </button>
 
           <div className="mb-8">
             <h2 className="font-display text-4xl font-bold text-gray-900 mb-2 leading-tight">
@@ -214,7 +223,7 @@ export default function VerificationPage() {
           </div>
 
           {/* Case Summary Card */}
-          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6 max-w-3xl">
+          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6">
             <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wide mb-4">
               Case Summary
             </h3>
@@ -265,7 +274,7 @@ export default function VerificationPage() {
             </h3>
 
             {files.length === 0 ? (
-              <div className="bg-gray-50 rounded-xl p-6 text-center border border-gray-100 max-w-3xl">
+              <div className="bg-gray-50 rounded-xl p-6 text-center border border-gray-100">
                 <span className="material-icons text-3xl text-gray-300 mb-2">folder_open</span>
                 <p className="text-sm text-gray-400">No evidence files uploaded</p>
               </div>
@@ -274,7 +283,7 @@ export default function VerificationPage() {
                 {files.map((file, index) => (
                   <div
                     key={index}
-                    className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100 max-w-3xl"
+                    className="flex items-center gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100"
                   >
                     <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 shrink-0">
                       <span className="material-icons text-xl">{getFileIcon(file.name)}</span>
@@ -324,37 +333,11 @@ export default function VerificationPage() {
           )}
 
           {/* Negotiation Mode Toggle */}
-          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6 max-w-3xl">
+          <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 mb-6">
             <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wide mb-4">
               Negotiation Mode
             </h3>
             <div className="space-y-3">
-              <button
-                onClick={() => setNegotiationMode("ai")}
-                className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
-                  negotiationMode === "ai"
-                    ? "border-[#1a2a3a]/30 bg-[#1a2a3a]/5"
-                    : "border-gray-100 hover:border-gray-200"
-                }`}
-              >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                  negotiationMode === "ai" ? "bg-[#1a2a3a] text-white" : "bg-gray-100 text-gray-500"
-                }`}>
-                  <span className="material-icons text-xl">smart_toy</span>
-                </div>
-                <div className="text-left flex-1">
-                  <p className={`text-sm font-bold ${negotiationMode === "ai" ? "text-[#1a2a3a]" : "text-gray-700"}`}>
-                    AI Mock Negotiation
-                  </p>
-                  <p className="text-[11px] text-gray-400 mt-0.5">
-                    Practice against an AI opponent. Perfect for testing your strategy.
-                  </p>
-                </div>
-                {negotiationMode === "ai" && (
-                  <span className="material-icons text-[#1a2a3a]">check_circle</span>
-                )}
-              </button>
-
               <button
                 onClick={() => setNegotiationMode("pvp")}
                 className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
@@ -380,6 +363,32 @@ export default function VerificationPage() {
                   <span className="material-icons text-[#1a2a3a]">check_circle</span>
                 )}
               </button>
+
+              <button
+                onClick={() => setNegotiationMode("ai")}
+                className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
+                  negotiationMode === "ai"
+                    ? "border-[#1a2a3a]/30 bg-[#1a2a3a]/5"
+                    : "border-gray-100 hover:border-gray-200"
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                  negotiationMode === "ai" ? "bg-[#1a2a3a] text-white" : "bg-gray-100 text-gray-500"
+                }`}>
+                  <span className="material-icons text-xl">smart_toy</span>
+                </div>
+                <div className="text-left flex-1">
+                  <p className={`text-sm font-bold ${negotiationMode === "ai" ? "text-[#1a2a3a]" : "text-gray-700"}`}>
+                    AI Mock Negotiation
+                  </p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    Practice against an AI opponent. Perfect for testing your strategy.
+                  </p>
+                </div>
+                {negotiationMode === "ai" && (
+                  <span className="material-icons text-[#1a2a3a]">check_circle</span>
+                )}
+              </button>
             </div>
 
             {negotiationMode === "pvp" && (!uid || isAnonymous) && (
@@ -396,6 +405,14 @@ export default function VerificationPage() {
 
         <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="max-w-5xl mx-auto px-6 py-4">
+            {serverWarming && creating && (
+              <div className="mb-3 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                <span className="material-icons text-amber-500 text-base shrink-0 mt-0.5 animate-spin">sync</span>
+                <p className="text-xs text-amber-700 leading-relaxed">
+                  Server is starting up (free hosting). This may take up to 60 seconds — please keep this page open.
+                </p>
+              </div>
+            )}
             <button
               onClick={handleStartNegotiation}
               disabled={!allVerified || creating}
@@ -406,7 +423,11 @@ export default function VerificationPage() {
               }`}
             >
               <span className="text-base">
-                {creating ? "Creating Case..." : "Start Negotiation"}
+                {creating
+                  ? serverWarming
+                    ? "Server warming up..."
+                    : "Creating Case..."
+                  : "Start Negotiation"}
               </span>
               {!creating && (
                 <span className="material-icons text-lg group-hover:translate-x-1 transition-transform">
@@ -423,7 +444,7 @@ export default function VerificationPage() {
               </a>
             </div>
             <div className="text-center">
-              <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+              <p className="text-[10px] text-gray-400">© 2026 LexSuluh</p>
             </div>
           </div>
         </footer>

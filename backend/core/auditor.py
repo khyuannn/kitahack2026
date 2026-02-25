@@ -8,7 +8,7 @@ from pinecone import Pinecone
 
 load_dotenv()
 
-INDEX_NAME = "lex-machina-index"
+INDEX_NAME = "lexsuluh-index"
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 MIN_SCORE = 0.23
 
@@ -17,6 +17,22 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
 if GEMINI_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
+
+# Module-level singletons — initialized once on first use
+_auditor_index = None
+_auditor_embeddings = None
+
+def _get_auditor_clients():
+    global _auditor_index, _auditor_embeddings
+    if _auditor_index is None:
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        _auditor_index = pc.Index(INDEX_NAME)
+    if _auditor_embeddings is None:
+        _auditor_embeddings = GoogleGenerativeAIEmbeddings(
+            model=EMBEDDING_MODEL,
+            google_api_key=GEMINI_API_KEY,
+        )
+    return _auditor_index, _auditor_embeddings
 
 
 def _normalize(text: str) -> str:
@@ -110,7 +126,9 @@ def extract_citations_with_regex(agent_text: str) -> List[Dict[str, str]]:
 def _build_search_query(citation: Dict[str, str]) -> str:
     if citation["type"] == "order_rule":
         return f"Rules of Court {citation['law']} rule {citation['section']}"
-    return f"{citation['law']} section {citation['section']}"
+    # Remove subsection in brackets for query
+    section = citation["section"].split("(")[0].strip()
+    return f"{citation['law']} section {section}"
 
 
 def _match_citation_against_record(citation: Dict[str, str], match: Dict[str, Any]) -> bool:
@@ -124,7 +142,8 @@ def _match_citation_against_record(citation: Dict[str, str], match: Dict[str, An
     text = _normalize(str(metadata.get("text", "")))
 
     citation_law = _normalize(citation["law"])
-    citation_section = _normalize(citation["section"])
+    # Remove subsection in brackets for matching
+    citation_section = _normalize(citation["section"].split("(")[0].strip())
 
     if citation["type"] == "order_rule":
         if "order 93" in source and section == citation_section:
@@ -154,13 +173,7 @@ def check_rag_for_law(citation: Dict[str, str]) -> bool:
         return False
 
     try:
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model=EMBEDDING_MODEL,
-            google_api_key=GEMINI_API_KEY,
-        )
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index(INDEX_NAME)
-
+        index, embeddings = _get_auditor_clients()
         query_text = _build_search_query(citation)
         query_vector = embeddings.embed_query(query_text)
         if len(query_vector) > 768:
