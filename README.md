@@ -137,11 +137,19 @@ LLMs frequently invent section numbers. The Citation Auditor addresses this:
 4. Message is regenerated (up to 2 retries)
 5. If still failing after retries — message is delivered with an `auditor_warning` flag visible to the user
 
-#### BATNA and Game Theory Prompting
+#### BATNA and Negotiation Structure
 
-- **Round-decay aggressiveness**: agent stance starts at 1.0 (fully adversarial) and decays to 0.2 by round 4, nudging toward settlement
-- **Price constraints**: floor and ceiling RM values hard-coded into prompts; agents cannot propose settlements outside the negotiable range
-- **Nash Equilibrium convergence**: Mediator AI at round 3 calculates midpoint ZOPA and argues for convergence from neutral position
+The 4-round structure is fixed and procedural:
+
+- **Round 1 — Opening**: Plaintiff AI anchors high; Defendant AI establishes its defensive position
+- **Round 2 — Assert/Counter**: Both agents make strategic counter-offers backed by statute citations
+- **Round 2.5 — Mediator injection**: After round 2 completes, the Mediator AI is auto-injected without requiring user input. It analyses both positions, evaluates argument strength against the RAG legal context, and outputs a neutral settlement recommendation with a specific RM amount (`recommended_settlement_rm`). This recommendation is advisory — both parties can ignore it.
+- **Round 3 — Post-mediator**: Agents respond to mediator guidance; round-specific prompts push toward compromise
+- **Round 4 — BATNA**: Both agents invoke BATNA framing in their prompts — citing court costs, time, and outcome uncertainty — as a final-round pressure tactic. No further rounds are possible; the UI forces an accept/reject decision.
+
+**Price constraints**: Plaintiff sets a floor price (minimum acceptable settlement); defendant's maximum offer defaults to 50% of the claim amount, or a custom ceiling in PvP mode. Agents are instructed never to propose outside their respective bound.
+
+**Commander Directive override**: Users can explicitly command their AI agent with a specific offer amount (e.g., "offer RM1,500"). This is injected as a `[COMMANDER DIRECTIVE — MUST FOLLOW]` block and overrides the agent's autonomous judgment, subject to the floor/ceiling bound.
 
 #### PvP Human-in-the-Loop
 
