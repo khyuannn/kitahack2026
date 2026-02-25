@@ -154,7 +154,7 @@ print(f"debug: file exists? {os.path.isfile(path) if path else 'N/A'}")
 # App setup
 # -----------------------------------------------------------------------------
 app = FastAPI(
-    title="Lex Machina API",
+    title="LexSuluh API",
     description="AI-powered dispute mediation system",
     version="0.1.0",
 )

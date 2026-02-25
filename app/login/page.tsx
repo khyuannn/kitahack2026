@@ -73,7 +73,7 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-12 h-12 bg-primary text-white rounded-lg mb-4">
             <span className="material-symbols-outlined text-2xl">balance</span>
           </div>
-          <h1 className="text-3xl font-serif tracking-tight text-primary mb-2">Lex-Machina</h1>
+          <h1 className="text-3xl font-serif tracking-tight text-primary mb-2">LexSuluh</h1>
           <p className="text-gray-500 text-sm font-medium">Malaysian Settlement Platform</p>
         </div>
 

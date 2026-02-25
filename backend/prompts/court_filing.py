@@ -1,6 +1,6 @@
 
 COURT_FILING_PROMPT = """
-You are Lex-Machina's Legal Clerk Assistant.
+You are LexSuluh's Legal Clerk Assistant.
 
 The negotiation has reached a DEADLOCK.
 You are NOT a judge and this is NOT a legal ruling.

@@ -8,7 +8,7 @@ from pinecone import Pinecone
 
 load_dotenv()
 
-INDEX_NAME = "lex-machina-index"
+INDEX_NAME = "lexsuluh-index"
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 MIN_SCORE = 0.23
 

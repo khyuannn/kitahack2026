@@ -7,7 +7,7 @@ def build_mediator_prompt(case_data: dict, conversation_history: str) -> str:
     floor_price = case_data.get("floor_price", 0)
 
     return f"""
-You are Lex-Machina, a neutral mediation assistant in a Malaysian Small Claims dispute.
+You are LexSuluh, a neutral mediation assistant in a Malaysian Small Claims dispute.
 You are NOT a judge. You do NOT take sides.
 
 Case Title: {case_title}

@@ -2,7 +2,7 @@
 <html lang="en"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Lex-Machina - Select Dispute Type</title>
+<title>LexSuluh - Select Dispute Type</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&amp;family=Inter:wght@400;500;600&amp;family=Material+Icons+Round&amp;display=swap" rel="stylesheet"/>
 <script>
@@ -49,7 +49,7 @@
 <div class="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
 <span class="material-icons-round text-white text-2xl">balance</span>
 </div>
-<h1 class="font-serif-display font-bold text-2xl tracking-tight text-black dark:text-white">Lex-Machina</h1>
+<h1 class="font-serif-display font-bold text-2xl tracking-tight text-black dark:text-white">LexSuluh</h1>
 </div>
 </header>
 <main class="max-w-md mx-auto px-6 py-8">
@@ -130,7 +130,7 @@
 <div>
 <h4 class="text-xs font-bold uppercase text-black dark:text-white mb-2 tracking-wide">Malaysian Jurisdiction Note</h4>
 <p class="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
-                    Cases under RM 5,000 are processed via the Small Claims Court framework. Lex-Machina uses these guidelines to optimize outcomes.
+                    Cases under RM 5,000 are processed via the Small Claims Court framework. LexSuluh uses these guidelines to optimize outcomes.
                 </p>
 </div>
 </div>

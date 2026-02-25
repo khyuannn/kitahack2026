@@ -24,7 +24,7 @@ export default function VerificationPage() {
   const [allVerified, setAllVerified] = useState(false);
   const [creating, setCreating] = useState(false);
   const [serverWarming, setServerWarming] = useState(false);
-  const [negotiationMode, setNegotiationMode] = useState<"ai" | "pvp">("ai");
+  const [negotiationMode, setNegotiationMode] = useState<"ai" | "pvp">("pvp");
 
   useEffect(() => {
     // Load case data from localStorage
@@ -184,14 +184,25 @@ export default function VerificationPage() {
     <div className="bg-off-white min-h-screen font-sans antialiased text-gray-900 pb-40">
       <div className="w-full">
         {/* Header */}
-        <header className="px-6 py-5 border-b border-gray-100 flex items-center gap-4 bg-white sticky top-0 z-10">
-          <div className="w-10 h-10 bg-[#1a1a1a] rounded-lg flex items-center justify-center shrink-0">
-            <span className="material-icons text-white text-xl">balance</span>
+        <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
+          <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
+            <div className="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
+              <span className="material-icons-round text-white text-2xl">balance</span>
+            </div>
+            <h1 className="font-serif font-bold text-2xl tracking-tight text-black">LexSuluh</h1>
           </div>
-          <h1 className="font-display text-2xl font-bold text-black tracking-wide">Lex-Machina</h1>
         </header>
 
         <main className="max-w-5xl mx-auto px-6 pt-8 pb-8">
+          {/* Back link */}
+          <button
+            onClick={() => router.push("/case/new/evidence")}
+            className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
+          >
+            <span className="material-icons text-sm mr-1">arrow_back</span>
+            Back to Upload
+          </button>
+
           {/* Step indicator */}
           <div className="flex items-center gap-2 mb-4">
             <span className="bg-black text-white text-xs font-bold px-2 py-1 rounded tracking-wide">
@@ -201,15 +212,6 @@ export default function VerificationPage() {
               Of 4
             </span>
           </div>
-
-          {/* Back link */}
-          <button
-            onClick={() => router.push("/case/new/evidence")}
-            className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
-          >
-            <span className="material-icons text-sm mr-1">arrow_back</span>
-            Back to Upload
-          </button>
 
           <div className="mb-8">
             <h2 className="font-display text-4xl font-bold text-gray-900 mb-2 leading-tight">
@@ -337,32 +339,6 @@ export default function VerificationPage() {
             </h3>
             <div className="space-y-3">
               <button
-                onClick={() => setNegotiationMode("ai")}
-                className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
-                  negotiationMode === "ai"
-                    ? "border-[#1a2a3a]/30 bg-[#1a2a3a]/5"
-                    : "border-gray-100 hover:border-gray-200"
-                }`}
-              >
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                  negotiationMode === "ai" ? "bg-[#1a2a3a] text-white" : "bg-gray-100 text-gray-500"
-                }`}>
-                  <span className="material-icons text-xl">smart_toy</span>
-                </div>
-                <div className="text-left flex-1">
-                  <p className={`text-sm font-bold ${negotiationMode === "ai" ? "text-[#1a2a3a]" : "text-gray-700"}`}>
-                    AI Mock Negotiation
-                  </p>
-                  <p className="text-[11px] text-gray-400 mt-0.5">
-                    Practice against an AI opponent. Perfect for testing your strategy.
-                  </p>
-                </div>
-                {negotiationMode === "ai" && (
-                  <span className="material-icons text-[#1a2a3a]">check_circle</span>
-                )}
-              </button>
-
-              <button
                 onClick={() => setNegotiationMode("pvp")}
                 className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
                   negotiationMode === "pvp"
@@ -384,6 +360,32 @@ export default function VerificationPage() {
                   </p>
                 </div>
                 {negotiationMode === "pvp" && (
+                  <span className="material-icons text-[#1a2a3a]">check_circle</span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setNegotiationMode("ai")}
+                className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
+                  negotiationMode === "ai"
+                    ? "border-[#1a2a3a]/30 bg-[#1a2a3a]/5"
+                    : "border-gray-100 hover:border-gray-200"
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                  negotiationMode === "ai" ? "bg-[#1a2a3a] text-white" : "bg-gray-100 text-gray-500"
+                }`}>
+                  <span className="material-icons text-xl">smart_toy</span>
+                </div>
+                <div className="text-left flex-1">
+                  <p className={`text-sm font-bold ${negotiationMode === "ai" ? "text-[#1a2a3a]" : "text-gray-700"}`}>
+                    AI Mock Negotiation
+                  </p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    Practice against an AI opponent. Perfect for testing your strategy.
+                  </p>
+                </div>
+                {negotiationMode === "ai" && (
                   <span className="material-icons text-[#1a2a3a]">check_circle</span>
                 )}
               </button>
@@ -442,7 +444,7 @@ export default function VerificationPage() {
               </a>
             </div>
             <div className="text-center">
-              <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+              <p className="text-[10px] text-gray-400">© 2026 LexSuluh</p>
             </div>
           </div>
         </footer>

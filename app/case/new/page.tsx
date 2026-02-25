@@ -67,7 +67,7 @@ export default function SelectDisputeTypePage() {
           <div className="w-10 h-10 bg-black rounded-lg flex items-center justify-center shrink-0">
             <span className="material-icons-round text-white text-2xl">balance</span>
           </div>
-          <h1 className="font-serif font-bold text-2xl tracking-tight text-black">Lex-Machina</h1>
+          <h1 className="font-serif font-bold text-2xl tracking-tight text-black">LexSuluh</h1>
         </div>
       </header>
 
@@ -144,7 +144,7 @@ export default function SelectDisputeTypePage() {
               Malaysian Jurisdiction Note
             </h4>
             <p className="text-xs text-gray-600 leading-relaxed">
-              Cases under RM 5,000 are processed via the Small Claims Court framework. Lex-Machina
+              Cases under RM 5,000 are processed via the Small Claims Court framework. LexSuluh
               uses these guidelines to optimize outcomes.
             </p>
           </div>
@@ -168,7 +168,7 @@ export default function SelectDisputeTypePage() {
               <a className="hover:text-gray-600" href="#">Privacy Policy</a>
               <a className="hover:text-gray-600" href="#">Terms of Service</a>
             </div>
-            <p className="text-[10px] text-gray-400">© 2026 Lex-Machina</p>
+            <p className="text-[10px] text-gray-400">© 2026 LexSuluh</p>
           </div>
         </div>
       </footer>
