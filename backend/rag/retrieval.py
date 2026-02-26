@@ -10,7 +10,7 @@ from pinecone import Pinecone
 # Load env variables
 load_dotenv()
 
-INDEX_NAME = "lexsuluh-index"
+INDEX_NAME = "lex-machina-index"
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 

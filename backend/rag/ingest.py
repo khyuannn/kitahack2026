@@ -14,7 +14,7 @@ load_dotenv()
 if os.getenv("GEMINI_API_KEY"):
     os.environ["GOOGLE_API_KEY"] = os.getenv("GEMINI_API_KEY")
 
-INDEX_NAME = "lexsuluh-index"
+INDEX_NAME = "lex-machina-index"
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 
