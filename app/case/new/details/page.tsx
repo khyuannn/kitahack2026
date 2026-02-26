@@ -70,14 +70,6 @@ export default function CaseDetailsPage() {
             </span>
           </div>
 
-          {/* Back link */}
-          <button
-            onClick={() => router.push("/case/new")}
-            className="inline-flex items-center text-text-secondary-light text-xs font-semibold mb-6 hover:text-primary transition-colors uppercase tracking-wide"
-          >
-            <span className="material-icons text-sm mr-1">arrow_back</span>
-            Back to Types
-          </button>
 
           <div className="mb-8">
             <h2 className="font-display text-4xl font-bold text-gray-900 mb-2 leading-tight">
