@@ -52,6 +52,17 @@ def get_db():
     return firestore.client()
 
 
+def _log_analytics(doc_id: str, field: str) -> None:
+    """Fire-and-forget Firestore analytics increment. Never blocks the main flow."""
+    try:
+        db = get_db()
+        db.collection("analytics").document(doc_id).set(
+            {field: firestore.Increment(1)}, merge=True
+        )
+    except Exception as e:
+        print(f"⚠️ Analytics write skipped: {e}")
+
+
 def _clip_text(value: str, limit: int) -> str:
     if not value:
         return ""
@@ -905,6 +916,8 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
         finally:
             p_audit_pool.shutdown(wait=False)
 
+        _log_analytics("auditor_metrics", "auto_audit_passes" if plaintiff_auditor_passed else "auto_audit_failures")
+
         plaintiff_msg_ref.update({
             "audio_url": plaintiff_audio_url,
             "auditor_passed": plaintiff_auditor_passed,
@@ -948,6 +961,7 @@ Now respond as the Defendant. Remember to output ONLY valid JSON."""
             d_tts_pool.shutdown(wait=False)
 
         auditor_passed = audit_result["is_valid"]
+        _log_analytics("auditor_metrics", "auto_audit_passes" if auditor_passed else "auto_audit_failures")
         if not auditor_passed:
             auditor_warning = audit_result.get("auditor_warning", "Citation validation failed")
             print(f"❌ [Auditor] Failed: {auditor_warning}")

@@ -1045,6 +1045,14 @@ Rules for this retry:
 
     result = validate_turn(regenerated_text)
 
+    try:
+        field = "manual_retry_successes" if result["is_valid"] else "manual_retry_failures"
+        db.collection("analytics").document("auditor_metrics").set(
+            {field: firestore.Increment(1)}, merge=True
+        )
+    except Exception as e:
+        print(f"⚠️ Analytics write skipped: {e}")
+
     msg_ref.update({
         "content": regenerated_text,
         "counter_offer_rm": regenerated_offer,
@@ -1370,6 +1378,13 @@ async def accept_final_offer(caseId: str):
             loop = asyncio.get_event_loop()
             settlement = await loop.run_in_executor(None, generate_mediator_settlement, caseId)
 
+            try:
+                db.collection("analytics").document("settlement_metrics").set(
+                    {"total_settlements_reached": firestore.Increment(1)}, merge=True
+                )
+            except Exception as e:
+                print(f"⚠️ Analytics write skipped: {e}")
+
             return {
                 "status": "settled",
                 "settlement": settlement,
@@ -1671,7 +1686,14 @@ async def reject_final_offer(caseId: str):
             "status": "deadlock",
             "game_state": "deadlock"
         })
-        
+
+        try:
+            db.collection("analytics").document("settlement_metrics").set(
+                {"total_deadlocks_reached": firestore.Increment(1)}, merge=True
+            )
+        except Exception as e:
+            print(f"⚠️ Analytics write skipped: {e}")
+
         # Add system message
         case_ref.collection("messages").add({
             "role": "system",
