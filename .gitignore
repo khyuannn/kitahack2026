@@ -28,3 +28,6 @@ Thumbs.db
 
 .vercel
 .env*.local
+
+# Project files
+form.md
