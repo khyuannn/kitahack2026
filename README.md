@@ -10,6 +10,12 @@
 
 ---
 
+## 🚀 Live Prototype
+
+**Try it now:** [https://lexsuluh.vercel.app/](https://lexsuluh.vercel.app/)
+
+---
+
 ## Project Description
 
 LexSuluh ("Suluh" = torch/light in Malay) is an AI-powered dispute resolution platform that lets two parties resolve small claims disputes in under 15 minutes — without lawyers, without courts, and without legal expertise. Each party commands their own AI legal agent via strategy directives; the agents argue the case using real Malaysian statute citations, guided by a neutral Mediator AI. Disputes end in either a legally-formatted settlement agreement or a ready-to-file court form.
